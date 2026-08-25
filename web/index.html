@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TrustChain Console</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="mark"></span>
+        <div>
+          <h1>TrustChain</h1>
+          <p>Decentralised identity, role-based access control, NFT asset ownership</p>
+        </div>
+      </div>
+      <div class="actor">
+        <label for="actor">Acting as</label>
+        <select id="actor"></select>
+        <span id="status" class="pill pill-muted">connecting…</span>
+      </div>
+    </header>
+
+    <section class="identity-bar" id="identity-bar">
+      <div class="field"><span class="k">DID</span><span class="v mono" id="me-did">–</span></div>
+      <div class="field"><span class="k">Key</span><span class="v mono" id="me-key">–</span></div>
+      <div class="field"><span class="k">Status</span><span class="v" id="me-status">–</span></div>
+      <div class="field grow"><span class="k">Roles</span><span class="v chips" id="me-roles"></span></div>
+      <div class="field grow"><span class="k">Permissions</span><span class="v chips" id="me-perms"></span></div>
+    </section>
+
+    <main>
+      <section class="panel">
+        <header>
+          <h2>Identities</h2>
+          <button class="ghost" id="register-self">Register my identity</button>
+        </header>
+        <div class="list" id="identities"></div>
+      </section>
+
+      <section class="panel">
+        <header><h2>Assets</h2></header>
+        <form class="form" id="mint-form">
+          <div class="row">
+            <label>Allocate to<select id="mint-to"></select></label>
+            <label>Category<input id="mint-category" value="property-title" /></label>
+          </div>
+          <div class="row">
+            <label>Metadata URI<input id="mint-uri" value="ipfs://asset/new" /></label>
+            <label>Source document<input id="mint-source" value="deed-2026-0042.pdf" /></label>
+          </div>
+          <div class="row bottom">
+            <label class="check"><input type="checkbox" id="mint-soulbound" /> Soulbound (never transferable)</label>
+            <button id="mint-btn" data-perm="MINT_ASSET">Mint asset NFT</button>
+          </div>
+        </form>
+        <div class="list" id="assets"></div>
+      </section>
+
+      <section class="panel audit">
+        <header>
+          <h2>Audit trail</h2>
+          <span class="pill pill-muted" id="audit-count">0 entries</span>
+        </header>
+        <div class="table-wrap">
+          <table id="audit">
+            <thead>
+              <tr><th>#</th><th>Action</th><th>Actor</th><th>Subject</th><th>Block</th><th>Time</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <div id="toasts"></div>
+
+    <script src="./vendor/ethers.umd.min.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>
