@@ -210,3 +210,6 @@ ol.onboard label.named span { font-size: 11px; text-transform: uppercase; letter
   font-size: 13px;
 }
 .mismatch b { color: #ffd98a; }
+
+.pill-wait { background: #3a2a12; color: #f3c46b; }
+.chip.wait { background: #3a2a12; border-color: #6b4a17; color: #f3c46b; }

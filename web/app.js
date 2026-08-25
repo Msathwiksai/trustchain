@@ -731,8 +731,19 @@ function renderIdentities() {
     .join("");
   if (keep && active.some((i) => i.didHash === keep)) target.value = keep;
 
+  // Someone who has registered but holds no role is a new joiner waiting to be given
+  // access. That is on-chain fact, not a guess, and it is the first thing an
+  // administrator should see when they open the platform.
+  const awaiting = state.identities.filter((i) => !i.revoked && i.roles.length === 0);
+  const badge = $("#pending-count");
+  badge.hidden = awaiting.length === 0;
+  badge.textContent = `${awaiting.length} awaiting access`;
+  badge.className = awaiting.length ? "pill pill-wait" : "pill pill-muted";
+
+  const ordered = [...awaiting, ...state.identities.filter((i) => !awaiting.includes(i))];
+
   box.innerHTML = state.identities.length ? "" : `<div class="empty">No identities yet.</div>`;
-  for (const i of state.identities) {
+  for (const i of ordered) {
     const el = document.createElement("div");
     el.className = "item";
     el.innerHTML = `
@@ -743,7 +754,12 @@ function renderIdentities() {
       <div class="sub mono">${i.didHash}</div>
       <div class="sub mono">key ${i.controller} &middot; ${i.docURI}</div>
       <div class="chips">
-        ${i.roles.map((r) => `<span class="chip role">${ROLE_NAME[r] ?? shortDid(r)}</span>`).join("") || `<span class="chip">no roles</span>`}
+        ${
+          i.roles.map((r) => `<span class="chip role">${ROLE_NAME[r] ?? shortDid(r)}</span>`).join("") ||
+          (i.revoked
+            ? `<span class="chip">no roles</span>`
+            : `<span class="chip wait">awaiting access &mdash; registered, no permissions yet</span>`)
+        }
       </div>
       <div class="actions">
         <select class="role-pick">${ROLE_LIST.map((r) => `<option value="${ROLE_ID[r]}">${r}</option>`).join("")}</select>
