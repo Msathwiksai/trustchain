@@ -83,7 +83,14 @@ async function boot() {
   }
 
   const wanted = new URLSearchParams(location.search).get("network");
-  state.cfg = available.find((d) => d.network === wanted) ?? available[0];
+  let chosen = available.find((d) => d.network === wanted);
+  if (!chosen && injected()) {
+    // With more than one deployment around, follow whichever chain the wallet is already
+    // on. Nobody has to think about networks, and nothing has to be switched.
+    const walletChain = Number(await injected().request({ method: "eth_chainId" }).catch(() => 0));
+    chosen = available.find((d) => Number(d.chainId) === walletChain);
+  }
+  state.cfg = chosen ?? available[0];
   state.rpcUrl = state.cfg.rpcUrl || FALLBACK_RPC;
   renderNetworkPicker(available);
 
@@ -176,7 +183,13 @@ async function connect({ silent = false } = {}) {
     if (!accounts?.length) return;
     state.wallet = new ethers.BrowserProvider(eth);
     state.actor = ethers.getAddress(accounts[0]);
-    await ensureChain();
+    // Only ever prompt for a network switch on a deliberate action - never on a reload,
+    // or a background tab quietly stacks up confirmations in the wallet.
+    if (silent) {
+      state.wrongChain = !(await onPlatformChain());
+    } else {
+      await ensureChain();
+    }
   } catch (e) {
     if (e?.code === 4001) return toast("Connection refused", "you rejected the request in MetaMask", "err");
     return toast("Wallet error", e?.message ?? String(e), "err");
@@ -184,6 +197,18 @@ async function connect({ silent = false } = {}) {
 
   renderWallet();
   await refresh();
+}
+
+async function walletChainId() {
+  try {
+    return Number(await injected().request({ method: "eth_chainId" }));
+  } catch {
+    return null;
+  }
+}
+
+async function onPlatformChain() {
+  return (await walletChainId()) === Number(state.cfg.chainId);
 }
 
 /** Ask the wallet to move to the platform's chain, adding it if it is unknown. */
@@ -445,6 +470,7 @@ async function readChain() {
     });
   }
 
+  if (state.actor && injected()) state.wrongChain = !(await onPlatformChain());
   state.perms = state.actor ? await RoleManager.permissionsOf(state.actor) : 0n;
   state.balance = state.actor ? await state.provider.getBalance(state.actor) : 0n;
   if (state.request && state.identities.some((i) => sameAddr(i.controller, state.actor))) {
@@ -454,6 +480,7 @@ async function readChain() {
   const entries = await AuditTrail.getEntries(count > 300 ? count - 300 : 0, 300);
 
   renderMe();
+  renderMismatch();
   renderOnboarding();
   renderIdentities();
   renderAssets();
@@ -492,6 +519,23 @@ function renderNetworkPicker(available) {
   sel.value = state.cfg.network;
   sel.onchange = () => {
     location.search = `?network=${sel.value}`;
+  };
+}
+
+function renderMismatch() {
+  const bar = $("#mismatch");
+  if (!state.actor || !state.wrongChain) {
+    bar.hidden = true;
+    return;
+  }
+  bar.hidden = false;
+  bar.innerHTML = `<span>Your wallet is on a different network, so this page is read-only.
+    It is showing <b>${state.cfg.network}</b>.</span>
+    <button class="small" id="do-switch">Switch wallet to ${state.cfg.network}</button>`;
+  $("#do-switch").onclick = async () => {
+    await ensureChain();
+    renderMismatch();
+    await refresh();
   };
 }
 

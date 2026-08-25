@@ -203,3 +203,10 @@ ol.onboard .alt {
 
 ol.onboard label.named { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; max-width: 380px; }
 ol.onboard label.named span { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+
+.mismatch {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  padding: 10px 24px; background: #3a2a12; border-bottom: 1px solid #6b4a17; color: #f3c46b;
+  font-size: 13px;
+}
+.mismatch b { color: #ffd98a; }
