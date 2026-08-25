@@ -140,12 +140,39 @@ neither is a client-side warning.
 > Restarting the node resets the chain while MetaMask keeps the old nonces, so pending
 > transactions will hang. Settings -> Advanced -> **Clear activity tab data** fixes it.
 
-### Deploying to a testnet
+### Deploying to Sepolia
 
-`scripts/deploy.js` works against any network configured in `hardhat.config.js`; add an RPC
-URL and an account, then `npx hardhat run scripts/deploy.js --network <name>`. Contract
-addresses are written to `deployments/<network>.json`, which is also what the web console
-reads.
+Two things are needed, and only one of them costs anything:
+
+| | Required? | Notes |
+| --- | --- | --- |
+| **RPC endpoint** | yes, but free | Defaults to the public `ethereum-sepolia-rpc.publicnode.com`, which needs no signup. Set `SEPOLIA_RPC_URL` to an Alchemy or Infura URL if you want their rate limits and reliability — the deployment does not depend on it. |
+| **Funded key** | yes | The deployer becomes the platform's root admin. `npm run wallet:new` generates a throwaway key locally; fund it from a Sepolia faucet. |
+| **Etherscan key** | no | Only for `npm run verify:sepolia`, which publishes the source. Skip it and the contracts still work. |
+
+```bash
+cp .env.example .env      # fill in PRIVATE_KEY (never commit it, never paste it into chat)
+npm run wallet:new        # optional - generates a throwaway deployer key
+npm run preflight         # checks the endpoint, chain id, balance, and estimated cost
+npm run deploy:sepolia
+npm run verify:sepolia    # optional - needs ETHERSCAN_API_KEY
+```
+
+`preflight` refuses to let you burn gas on a misconfiguration: it verifies the endpoint
+answers, that its chain id really is 11155111, that an account is configured, and that the
+balance covers the estimated ~7.2M gas. Deployment on a public chain waits two
+confirmations between the wiring transactions, so a reorg cannot leave the platform
+half-connected.
+
+Addresses land in `deployments/sepolia.json`. The web console picks that file up
+automatically and shows a network selector; `?network=sepolia` picks it explicitly. The
+committed file records the *public* RPC endpoint deliberately — `SEPOLIA_RPC_URL` may carry
+an API key, and that key has no business in a repository.
+
+On a public network there is no seed script: `ethers.getSigners()` gives you one account,
+not ten. The deployer already holds `ADMIN` with a registered DID, so onboarding happens
+through the console — connect as the deployer, let other people register their own
+identities, then grant them roles.
 
 Deployment order matters, because the contracts verify each other: `AuditTrail` →
 `DIDRegistry` (registered as a writer) → the root admin registers its own DID →
@@ -182,6 +209,10 @@ Deployment order matters, because the contracts verify each other: `AuditTrail` 
   "credential bound to an identity" case, but there is no VC issuance/presentation flow.
 - **No upgradeability.** The contracts are immutable by design; a migration would mean
   redeploying and re-anchoring identities.
+- **The root admin is the deployer key.** On Sepolia that is whatever `PRIVATE_KEY` holds,
+  which makes it a single point of failure until you hand `ADMIN` to a multisig and revoke
+  the original grant. The contracts support that today; the deploy script does not do it
+  for you.
 - **The demo keys are public.** `npm run accounts` prints the standard Hardhat development
   keys so the walkthrough is reproducible. They are worthless by design; a real deployment
   uses accounts MetaMask generated and this script has no reason to exist.

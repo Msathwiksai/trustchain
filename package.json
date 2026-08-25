@@ -9,13 +9,18 @@
     "node": "hardhat node",
     "deploy:local": "hardhat run scripts/deploy.js --network localhost",
     "demo": "hardhat run scripts/demo.js",
-    "accounts": "hardhat run scripts/accounts.js"
+    "accounts": "hardhat run scripts/accounts.js",
+    "wallet:new": "hardhat run scripts/wallet-new.js",
+    "preflight": "hardhat run scripts/preflight.js --network sepolia",
+    "deploy:sepolia": "hardhat run scripts/deploy.js --network sepolia",
+    "verify:sepolia": "hardhat run scripts/verify.js --network sepolia"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",
     "hardhat": "^2.26.0"
   },
   "dependencies": {
-    "@openzeppelin/contracts": "^5.1.0"
+    "@openzeppelin/contracts": "^5.1.0",
+    "dotenv": "^17.4.2"
   }
 }

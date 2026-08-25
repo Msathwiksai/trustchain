@@ -41,6 +41,9 @@ body {
 
 .actor { display: flex; align-items: center; gap: 10px; }
 .actor label { color: var(--muted); font-size: 12px; }
+.actor select { min-width: 110px; }
+#status a { color: inherit; text-decoration: none; }
+#status a:hover { text-decoration: underline; }
 
 select, input[type="text"], input:not([type]) {
   background: var(--panel-2); color: var(--text);

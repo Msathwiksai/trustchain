@@ -51,6 +51,8 @@ async function main() {
   const addresses = {
     network: network.name,
     chainId: Number((await ethers.provider.getNetwork()).chainId),
+    rpcUrl: "http://127.0.0.1:8545",
+    explorer: null,
     rootAdmin: admin.address,
     auditTrail: await p.auditTrail.getAddress(),
     didRegistry: await didRegistry.getAddress(),

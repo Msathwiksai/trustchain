@@ -5,7 +5,8 @@
  * the acting identity is whichever account the wallet has selected.
  */
 
-const RPC = "http://127.0.0.1:8545";
+const DEPLOYMENTS = ["localhost", "sepolia"]; // deployments/<name>.json
+const FALLBACK_RPC = "http://127.0.0.1:8545";
 const NAMES = ["AuditTrail", "DIDRegistry", "RoleManager", "AssetNFT"];
 const KEY = { AuditTrail: "auditTrail", DIDRegistry: "didRegistry", RoleManager: "roleManager", AssetNFT: "assetNFT" };
 
@@ -39,7 +40,9 @@ const shortDid = (d) => (d && d !== ethers.ZeroHash ? d.slice(0, 10) + "…" : "
 const sameAddr = (a, b) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
 
 const state = {
-  provider: null, // read-only, straight to the node
+  provider: null, // read-only: direct RPC, or the wallet if that is unreachable
+  rpcUrl: null,
+  readViaWallet: false,
   wallet: null, // ethers.BrowserProvider over window.ethereum
   cfg: null,
   read: {},
@@ -55,11 +58,23 @@ const state = {
 // ------------------------------------------------------------------- plumbing
 
 async function boot() {
-  try {
-    state.cfg = await (await fetch("/deployments/localhost.json", { cache: "no-store" })).json();
-  } catch {
-    return fatal("No deployments/localhost.json - run `npm run seed:local` against a running `npx hardhat node`.");
+  const available = [];
+  for (const name of DEPLOYMENTS) {
+    try {
+      const res = await fetch(`/deployments/${name}.json`, { cache: "no-store" });
+      if (res.ok) available.push(await res.json());
+    } catch {
+      /* not deployed to this network */
+    }
   }
+  if (!available.length) {
+    return fatal("No deployment found - run `npm run seed:local` (local) or `npm run deploy:sepolia`.");
+  }
+
+  const wanted = new URLSearchParams(location.search).get("network");
+  state.cfg = available.find((d) => d.network === wanted) ?? available[0];
+  state.rpcUrl = state.cfg.rpcUrl || FALLBACK_RPC;
+  renderNetworkPicker(available);
 
   const abis = {};
   for (const n of NAMES) {
@@ -69,18 +84,33 @@ async function boot() {
   // contract can be named rather than shown as an opaque "execution reverted".
   state.errors = new ethers.Interface(NAMES.flatMap((n) => abis[n].filter((f) => f.type === "error")));
 
-  state.provider = new ethers.JsonRpcProvider(RPC);
+  // Reads prefer a direct RPC connection - no wallet, no popups, works before connecting.
+  // If that endpoint is unreachable, fall back to reading through the injected wallet.
   try {
+    state.provider = new ethers.JsonRpcProvider(state.rpcUrl, state.cfg.chainId);
     await state.provider.getBlockNumber();
   } catch {
-    return fatal("Cannot reach the node at " + RPC + " - is `npx hardhat node` running?");
+    if (!injected()) {
+      return fatal(`Cannot reach ${state.rpcUrl} and no wallet is installed to read through.`);
+    }
+    state.provider = new ethers.BrowserProvider(injected());
+    state.readViaWallet = true;
+    try {
+      await state.provider.getBlockNumber();
+    } catch {
+      return fatal(`Cannot reach ${state.rpcUrl}. Is the network up?`);
+    }
   }
   for (const n of NAMES) state.read[n] = new ethers.Contract(state.cfg[KEY[n]], abis[n], state.provider);
 
   for (const a of state.cfg.accounts ?? []) state.labels.set(a.address.toLowerCase(), a.name);
 
-  $("#status").textContent = `chain ${state.cfg.chainId}`;
-  $("#status").className = "pill pill-good";
+  const status = $("#status");
+  status.textContent = `${state.cfg.network} · chain ${state.cfg.chainId}`;
+  status.className = "pill pill-good";
+  if (state.cfg.explorer) {
+    status.innerHTML = `<a href="${state.cfg.explorer}/address/${state.cfg.assetNFT}" target="_blank" rel="noopener">${state.cfg.network} · chain ${state.cfg.chainId}</a>`;
+  }
   $("#connect").onclick = connect;
   $("#register-self").onclick = registerSelf;
   $("#mint-form").onsubmit = mint;
@@ -109,7 +139,7 @@ function injected() {
 function fatal(msg) {
   $("#status").textContent = "offline";
   $("#status").className = "pill pill-bad";
-  toast("Not connected", msg, "err");
+  toast("Not connected", msg, "err", true);
 }
 
 // -------------------------------------------------------------------- wallet
@@ -119,7 +149,7 @@ async function connect({ silent = false } = {}) {
   if (!eth) {
     return toast(
       "No wallet found",
-      "Install MetaMask, then add the local network: RPC " + RPC + ", chain id " + state.cfg.chainId,
+      `Install MetaMask, then add this network: RPC ${state.rpcUrl}, chain id ${state.cfg.chainId}`,
       "err"
     );
   }
@@ -158,8 +188,8 @@ async function ensureChain() {
         params: [
           {
             chainId: want,
-            chainName: `TrustChain dev (${state.cfg.network})`,
-            rpcUrls: [RPC],
+            chainName: `TrustChain (${state.cfg.network})`,
+            rpcUrls: [state.rpcUrl],
             nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
           },
         ],
@@ -211,6 +241,14 @@ async function send(label, fn) {
   try {
     const tx = await fn();
     toastEl = toast(label, "waiting for confirmation… " + short(tx.hash));
+    if (state.cfg.explorer) {
+      const a = document.createElement("a");
+      a.href = `${state.cfg.explorer}/tx/${tx.hash}`;
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.textContent = " view";
+      toastEl.lastChild.append(a);
+    }
     await tx.wait();
     toastEl.remove();
     toast(label, "confirmed", "ok");
@@ -221,20 +259,34 @@ async function send(label, fn) {
   await refresh();
 }
 
-function toast(title, detail, kind = "") {
+function toast(title, detail, kind = "", persist = false) {
   const el = document.createElement("div");
   el.className = "toast " + kind;
   el.innerHTML = `<div class="t"></div><div class="d"></div>`;
   el.firstChild.textContent = title;
   el.lastChild.textContent = detail;
   $("#toasts").append(el);
-  if (kind) setTimeout(() => el.remove(), 6000);
+  if (kind && !persist) setTimeout(() => el.remove(), 6000);
   return el;
 }
 
 // --------------------------------------------------------------------- reads
 
 async function refresh() {
+  try {
+    await readChain();
+    state.readFailed = false;
+  } catch (e) {
+    // A deployment file pointing at the wrong chain, or contracts that are not there,
+    // shows up here. Say so once rather than every poll.
+    if (!state.readFailed) {
+      state.readFailed = true;
+      fatal(`Cannot read the contracts on ${state.cfg.network} - check deployments/${state.cfg.network}.json. (${e.shortMessage ?? e.message})`);
+    }
+  }
+}
+
+async function readChain() {
   const { DIDRegistry, RoleManager, AssetNFT, AuditTrail } = state.read;
 
   const dids = await DIDRegistry.allDids(0, 200);
@@ -304,6 +356,20 @@ function gate() {
 }
 
 // -------------------------------------------------------------------- render
+
+function renderNetworkPicker(available) {
+  const sel = $("#network");
+  if (available.length < 2) {
+    sel.hidden = true;
+    return;
+  }
+  sel.hidden = false;
+  sel.innerHTML = available.map((d) => `<option value="${d.network}">${d.network}</option>`).join("");
+  sel.value = state.cfg.network;
+  sel.onchange = () => {
+    location.search = `?network=${sel.value}`;
+  };
+}
 
 function renderWallet() {
   const btn = $("#connect");
