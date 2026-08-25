@@ -58,13 +58,21 @@ const state = {
 // ------------------------------------------------------------------- plumbing
 
 async function boot() {
+  // The standalone build (scripts/bundle-console.js) inlines the deployment and the ABIs,
+  // so the page works from any host - or straight off disk - with nothing to fetch.
+  const embedded = typeof window !== "undefined" ? window.__TRUSTCHAIN__ : null;
+
   const available = [];
-  for (const name of DEPLOYMENTS) {
-    try {
-      const res = await fetch(`/deployments/${name}.json`, { cache: "no-store" });
-      if (res.ok) available.push(await res.json());
-    } catch {
-      /* not deployed to this network */
+  if (embedded) {
+    available.push(...embedded.deployments);
+  } else {
+    for (const name of DEPLOYMENTS) {
+      try {
+        const res = await fetch(`/deployments/${name}.json`, { cache: "no-store" });
+        if (res.ok) available.push(await res.json());
+      } catch {
+        /* not deployed to this network */
+      }
     }
   }
   if (!available.length) {
@@ -77,8 +85,12 @@ async function boot() {
   renderNetworkPicker(available);
 
   const abis = {};
-  for (const n of NAMES) {
-    abis[n] = (await (await fetch(`/artifacts/contracts/${n}.sol/${n}.json`)).json()).abi;
+  if (embedded) {
+    Object.assign(abis, embedded.abis);
+  } else {
+    for (const n of NAMES) {
+      abis[n] = (await (await fetch(`/artifacts/contracts/${n}.sol/${n}.json`)).json()).abi;
+    }
   }
   // One interface holding every custom error on the platform, so a revert from any
   // contract can be named rather than shown as an opaque "execution reverted".

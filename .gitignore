@@ -4,3 +4,4 @@ cache/
 typechain-types/
 .env
 *.log
+public/
