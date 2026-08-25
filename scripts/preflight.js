@@ -15,11 +15,18 @@ async function main() {
   console.log(`  network      ${network.name}`);
   console.log(`  rpc          ${redact(cfg.url ?? "in-process")}`);
 
+  const shapeProblem = looksWrong(cfg.url);
+  if (shapeProblem) return fail(shapeProblem);
+
   let chainId;
   try {
     chainId = Number((await ethers.provider.getNetwork()).chainId);
   } catch (e) {
-    return fail(`cannot reach the RPC endpoint - ${e.shortMessage ?? e.message}`);
+    return fail(
+      `cannot reach the RPC endpoint - ${e.shortMessage ?? e.message}\n` +
+        "           an Alchemy endpoint looks like https://eth-sepolia.g.alchemy.com/v2/<key>\n" +
+        "           leave SEPOLIA_RPC_URL blank to use the free public endpoint instead"
+    );
   }
   console.log(`  chain id     ${chainId}`);
   if (cfg.chainId && chainId !== cfg.chainId) {
@@ -57,6 +64,33 @@ async function main() {
   console.log("");
   console.log(`  ready. deploy with:  npm run deploy:${network.name}`);
   console.log("");
+}
+
+/**
+ * Catch the usual copy-paste mistakes before spending a network round trip on them:
+ * a provider's marketing page, or a dashboard URL, pasted in place of the endpoint.
+ */
+function looksWrong(url) {
+  if (!url) return null;
+  let host;
+  try {
+    ({ host } = new URL(url));
+  } catch {
+    return `SEPOLIA_RPC_URL is not a URL: ${url}`;
+  }
+  const marketing = ["www.alchemy.com", "alchemy.com", "www.infura.io", "infura.io", "dashboard.alchemy.com"];
+  if (marketing.includes(host)) {
+    return (
+      `${url} is a website, not an RPC endpoint.\n` +
+      "           Alchemy: dashboard -> your app -> Ethereum Sepolia -> copy the HTTPS URL\n" +
+      "                    it looks like https://eth-sepolia.g.alchemy.com/v2/<key>\n" +
+      "           Or leave SEPOLIA_RPC_URL blank to use the free public endpoint."
+    );
+  }
+  if (/alchemy\.com/.test(host) && !/\/v2\/.+/.test(url)) {
+    return `${redact(url)} is missing the /v2/<key> path that Alchemy endpoints carry.`;
+  }
+  return null;
 }
 
 /** Never print an RPC URL with an embedded API key. */
