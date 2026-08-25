@@ -200,3 +200,6 @@ ol.onboard .alt {
   margin-top: 8px; padding-top: 10px; border-top: 1px dashed var(--line);
   color: var(--muted); font-size: 12.5px;
 }
+
+ol.onboard label.named { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; max-width: 380px; }
+ol.onboard label.named span { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }

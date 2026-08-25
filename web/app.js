@@ -52,6 +52,7 @@ const state = {
   perms: 0n,
   balance: 0n,
   request: null, // signed identity request awaiting an administrator
+  requestName: "",
   labels: new Map(), // lowercase address -> friendly name from the seed script
   identities: [],
   assets: [],
@@ -324,10 +325,22 @@ function registrationTypes() {
   };
 }
 
+function slugify(name) {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 40);
+}
+
 async function signIdentityRequest() {
   if (!state.actor) return toast("Request identity", "connect MetaMask first", "err");
   try {
-    const docURI = `ipfs://did-document/${state.actor.toLowerCase()}`;
+    // Whatever they call themselves is inside the signed payload, so an administrator can
+    // read it before approving and cannot change it afterwards.
+    const typed = slugify($("#request-name")?.value ?? "");
+    const docURI = `ipfs://did-document/${typed || state.actor.toLowerCase()}`;
     const deadline = Math.floor(Date.now() / 1000) + 7 * 24 * 3600;
     const nonce = await state.read.DIDRegistry.nonces(state.actor);
 
@@ -580,7 +593,9 @@ function renderOnboarding() {
            <div class="row"><button class="small" id="copy-request">Copy code</button>
            <span class="why">waiting for an administrator to approve it</span></div>`
         : state.actor
-          ? `<button class="small" id="onboard-sign">Sign a request &mdash; free, no ETH</button>
+          ? `<label class="named"><span>Your name, as it should appear in your DID document</span>
+               <input id="request-name" placeholder="e.g. r-kumar" value="${state.requestName ?? ""}" /></label>
+             <button class="small" id="onboard-sign">Sign a request &mdash; free, no ETH</button>
              ${
                funded
                  ? `<button class="small ghost" id="onboard-register">Or register it myself</button>`
@@ -626,6 +641,13 @@ function renderOnboarding() {
   if (c) c.onclick = connect;
   const r = $("#onboard-register");
   if (r) r.onclick = registerSelf;
+  const nameInput = $("#request-name");
+  if (nameInput) {
+    nameInput.oninput = () => {
+      state.requestName = nameInput.value;
+    };
+    if (document.activeElement !== nameInput && state.requestName) nameInput.value = state.requestName;
+  }
   const sg = $("#onboard-sign");
   if (sg) sg.onclick = signIdentityRequest;
 
@@ -645,9 +667,10 @@ function previewRequest() {
   try {
     const r = decodeRequest(raw);
     const expired = r.deadline * 1000 < Date.now();
+    const claimed = r.docURI.split("/").pop();
     el.textContent = expired
       ? `Request from ${short(r.subject)} has expired`
-      : `Request from ${r.subject} - signed by them, gas paid by you`;
+      : `"${claimed}" at ${short(r.subject)} - they signed this name themselves; you cannot change it`;
   } catch {
     el.textContent = "Not a valid request code";
   }
@@ -670,7 +693,7 @@ function renderIdentities() {
     el.className = "item";
     el.innerHTML = `
       <div class="head">
-        <span class="title">${label(i.controller)}${sameAddr(i.controller, state.actor) ? " (you)" : ""}</span>
+        <span class="title">${label(i.controller) === short(i.controller) ? i.docURI.split("/").pop() : label(i.controller)}${sameAddr(i.controller, state.actor) ? " (you)" : ""}</span>
         ${i.revoked ? `<span class="pill pill-bad">revoked</span>` : `<span class="pill pill-good">active</span>`}
       </div>
       <div class="sub mono">${i.didHash}</div>
