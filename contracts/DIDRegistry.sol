@@ -61,6 +61,7 @@ contract DIDRegistry is IDIDRegistry, EIP712 {
     error InvalidSignature();
     error ZeroAddress();
     error RoleManagerUnset();
+    error LastAdmin();
 
     constructor(address governor_, address auditTrail_) EIP712("TrustChainDIDRegistry", "1") {
         if (governor_ == address(0) || auditTrail_ == address(0)) revert ZeroAddress();
@@ -188,6 +189,9 @@ contract DIDRegistry is IDIDRegistry, EIP712 {
             if (address(roleManager) == address(0)) revert RoleManagerUnset();
             if (!roleManager.hasPermission(msg.sender, Perm.REVOKE_IDENTITY)) revert NotAuthorized();
         }
+        // Roles resolve through the identity, so revoking the last administrator's identity
+        // would strip its permissions just as surely as revoking the role itself.
+        if (address(roleManager) != address(0) && roleManager.isLastAdmin(didHash)) revert LastAdmin();
 
         id.revoked = true;
         id.updatedAt = uint64(block.timestamp);

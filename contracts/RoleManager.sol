@@ -59,9 +59,14 @@ contract RoleManager is IRoleManager {
     error TooManyRoles();
     error ZeroAddress();
     error ExpiryInPast();
+    error LastAdmin();
+    error AdminCannotExpire();
 
     address public pendingRootAdmin;
     bool public bootstrapped;
+
+    /// @notice Live ADMIN grants. The platform is unusable at zero, so it never gets there.
+    uint256 public adminCount;
 
     /**
      * @param didRegistry_ identity source of truth
@@ -182,6 +187,14 @@ contract RoleManager is IRoleManager {
     function _grant(bytes32 didHash, bytes32 role, uint64 expiresAt, address by) private {
         Grant storage g = _grants[didHash][role];
         if (g.active) revert AlreadyGranted();
+        if (role == Roles.ADMIN) {
+            // An expiring ADMIN would let the last administrator lapse silently, locking
+            // the platform with no transaction to point at. ADMIN is permanent until revoked.
+            if (expiresAt != 0) revert AdminCannotExpire();
+            unchecked {
+                adminCount += 1;
+            }
+        }
         if (g.grantedAt == 0) {
             if (_rolesOf[didHash].length >= MAX_ROLES_PER_IDENTITY) revert TooManyRoles();
             _rolesOf[didHash].push(role);
@@ -197,6 +210,13 @@ contract RoleManager is IRoleManager {
     function _revoke(bytes32 didHash, bytes32 role, address by) private {
         Grant storage g = _grants[didHash][role];
         if (!g.active) revert NotGranted();
+        if (role == Roles.ADMIN) {
+            // Appoint the successor first. Handover works; abdication does not.
+            if (adminCount <= 1) revert LastAdmin();
+            unchecked {
+                adminCount -= 1;
+            }
+        }
         g.active = false;
 
         emit RoleRevoked(didHash, role, by);
@@ -225,6 +245,11 @@ contract RoleManager is IRoleManager {
     function hasPermission(address account, uint256 permissions) public view override returns (bool) {
         if (permissions == 0) return true;
         return (permissionsOf(account) & permissions) == permissions;
+    }
+
+    /// @notice True if revoking this identity would leave the platform with no administrator.
+    function isLastAdmin(bytes32 didHash) external view override returns (bool) {
+        return adminCount <= 1 && _isLive(_grants[didHash][Roles.ADMIN]);
     }
 
     function hasRole(address account, bytes32 role) external view returns (bool) {

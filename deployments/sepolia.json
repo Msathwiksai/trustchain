@@ -1,0 +1,12 @@
+{
+  "network": "sepolia",
+  "chainId": 11155111,
+  "rpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
+  "explorer": "https://sepolia.etherscan.io",
+  "deployedAtBlock": 11565823,
+  "rootAdmin": "0x7b4d8d81a65e748B711543b21eD392199D93A989",
+  "auditTrail": "0xe30ab34a313eb63761672E808a9CC1196D26044e",
+  "didRegistry": "0xd56334D76bd1309dbB35aC33DD8755405C9293Ec",
+  "roleManager": "0x4c6ffc0d69DF44993Ea231f3BE1e2e15B68D2f5b",
+  "assetNFT": "0xc0A0569B9EBC2a9e53E07f7E951464c0aE30Be19"
+}

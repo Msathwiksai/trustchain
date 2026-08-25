@@ -25,4 +25,7 @@ interface IRoleManager {
     function hasPermission(address account, uint256 permissions) external view returns (bool);
 
     function permissionsOf(address account) external view returns (uint256);
+
+    /// @return true if revoking this identity would leave the platform with no administrator
+    function isLastAdmin(bytes32 didHash) external view returns (bool);
 }
