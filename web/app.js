@@ -1,4 +1,9 @@
-/* TrustChain console - talks to a local Hardhat node over JSON-RPC. */
+/* TrustChain console.
+ *
+ * Reads go straight to the node over JSON-RPC - they need no wallet and work before
+ * anyone connects. Every write is signed by MetaMask: the page never holds a key, and
+ * the acting identity is whichever account the wallet has selected.
+ */
 
 const RPC = "http://127.0.0.1:8545";
 const NAMES = ["AuditTrail", "DIDRegistry", "RoleManager", "AssetNFT"];
@@ -31,14 +36,18 @@ const ACTION_NAME = Object.fromEntries(
 const $ = (sel) => document.querySelector(sel);
 const short = (a) => (a ? a.slice(0, 6) + "…" + a.slice(-4) : "–");
 const shortDid = (d) => (d && d !== ethers.ZeroHash ? d.slice(0, 10) + "…" : "–");
+const sameAddr = (a, b) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
 
 const state = {
-  provider: null,
+  provider: null, // read-only, straight to the node
+  wallet: null, // ethers.BrowserProvider over window.ethereum
   cfg: null,
   read: {},
-  actor: null,
+  errors: null,
+  actor: null, // connected wallet account, or null
+  wrongChain: false,
   perms: 0n,
-  labels: new Map(), // lowercase address -> friendly name
+  labels: new Map(), // lowercase address -> friendly name from the seed script
   identities: [],
   assets: [],
 };
@@ -68,26 +77,33 @@ async function boot() {
   }
   for (const n of NAMES) state.read[n] = new ethers.Contract(state.cfg[KEY[n]], abis[n], state.provider);
 
-  const accounts = state.cfg.accounts ?? [{ name: "admin", address: state.cfg.rootAdmin }];
-  for (const a of accounts) state.labels.set(a.address.toLowerCase(), a.name);
-
-  const sel = $("#actor");
-  sel.innerHTML = accounts
-    .map((a) => `<option value="${a.address}">${a.name} - ${short(a.address)}</option>`)
-    .join("");
-  sel.onchange = () => {
-    state.actor = sel.value;
-    refresh();
-  };
-  state.actor = accounts[0].address;
+  for (const a of state.cfg.accounts ?? []) state.labels.set(a.address.toLowerCase(), a.name);
 
   $("#status").textContent = `chain ${state.cfg.chainId}`;
   $("#status").className = "pill pill-good";
+  $("#connect").onclick = connect;
   $("#register-self").onclick = registerSelf;
   $("#mint-form").onsubmit = mint;
 
+  if (injected()) {
+    injected().on?.("accountsChanged", (accts) => {
+      state.actor = accts[0] ? ethers.getAddress(accts[0]) : null;
+      if (!state.actor) state.wallet = null;
+      refresh();
+    });
+    injected().on?.("chainChanged", () => location.reload());
+    // Reconnect silently if this site is already authorised in the wallet.
+    const existing = await injected().request({ method: "eth_accounts" });
+    if (existing?.length) await connect({ silent: true });
+  }
+
+  renderWallet();
   await refresh();
   setInterval(refresh, 5000);
+}
+
+function injected() {
+  return typeof window !== "undefined" ? window.ethereum : undefined;
 }
 
 function fatal(msg) {
@@ -96,12 +112,86 @@ function fatal(msg) {
   toast("Not connected", msg, "err");
 }
 
+// -------------------------------------------------------------------- wallet
+
+async function connect({ silent = false } = {}) {
+  const eth = injected();
+  if (!eth) {
+    return toast(
+      "No wallet found",
+      "Install MetaMask, then add the local network: RPC " + RPC + ", chain id " + state.cfg.chainId,
+      "err"
+    );
+  }
+
+  try {
+    const accounts = await eth.request({ method: silent ? "eth_accounts" : "eth_requestAccounts" });
+    if (!accounts?.length) return;
+    state.wallet = new ethers.BrowserProvider(eth);
+    state.actor = ethers.getAddress(accounts[0]);
+    await ensureChain();
+  } catch (e) {
+    if (e?.code === 4001) return toast("Connection refused", "you rejected the request in MetaMask", "err");
+    return toast("Wallet error", e?.message ?? String(e), "err");
+  }
+
+  renderWallet();
+  await refresh();
+}
+
+/** Ask the wallet to move to the platform's chain, adding it if it is unknown. */
+async function ensureChain() {
+  const eth = injected();
+  const want = "0x" + Number(state.cfg.chainId).toString(16);
+  const have = await eth.request({ method: "eth_chainId" });
+  if (have?.toLowerCase() === want) {
+    state.wrongChain = false;
+    return;
+  }
+  try {
+    await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: want }] });
+    state.wrongChain = false;
+  } catch (e) {
+    if (e?.code === 4902) {
+      await eth.request({
+        method: "wallet_addEthereumChain",
+        params: [
+          {
+            chainId: want,
+            chainName: `TrustChain dev (${state.cfg.network})`,
+            rpcUrls: [RPC],
+            nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+          },
+        ],
+      });
+      state.wrongChain = false;
+    } else {
+      state.wrongChain = true;
+      toast("Wrong network", `switch MetaMask to chain ${state.cfg.chainId}`, "err");
+    }
+  }
+}
+
+/** MetaMask has no "switch account" API; re-requesting permissions opens its picker. */
+async function switchAccount() {
+  const eth = injected();
+  try {
+    await eth.request({ method: "wallet_requestPermissions", params: [{ eth_accounts: {} }] });
+  } catch (e) {
+    if (e?.code !== 4001) toast("Wallet error", e?.message ?? String(e), "err");
+  }
+  await connect({ silent: true });
+}
+
 async function writer(name) {
-  const signer = await state.provider.getSigner(state.actor);
+  if (!state.wallet) throw new Error("connect a wallet first");
+  if (state.wrongChain) await ensureChain();
+  const signer = await state.wallet.getSigner(state.actor);
   return state.read[name].connect(signer);
 }
 
 function errName(e) {
+  if (e?.code === 4001 || e?.info?.error?.code === 4001) return "you rejected the signature in MetaMask";
   const data = e?.data ?? e?.info?.error?.data?.data ?? e?.info?.error?.data;
   if (typeof data === "string" && data.length >= 10) {
     try {
@@ -116,12 +206,17 @@ function errName(e) {
 }
 
 async function send(label, fn) {
+  if (!state.actor) return toast(label, "connect MetaMask first", "err");
+  let toastEl;
   try {
     const tx = await fn();
+    toastEl = toast(label, "waiting for confirmation… " + short(tx.hash));
     await tx.wait();
+    toastEl.remove();
     toast(label, "confirmed", "ok");
   } catch (e) {
-    toast(label + " rejected by contract", errName(e), "err");
+    toastEl?.remove();
+    toast(label + " rejected", errName(e), "err");
   }
   await refresh();
 }
@@ -133,7 +228,8 @@ function toast(title, detail, kind = "") {
   el.firstChild.textContent = title;
   el.lastChild.textContent = detail;
   $("#toasts").append(el);
-  setTimeout(() => el.remove(), 6000);
+  if (kind) setTimeout(() => el.remove(), 6000);
+  return el;
 }
 
 // --------------------------------------------------------------------- reads
@@ -152,7 +248,6 @@ async function refresh() {
         docURI: id.docURI,
         revoked: id.revoked,
         roles: [...roles],
-        perms: await RoleManager.permissionsOfDid(didHash),
       };
     })
   );
@@ -172,7 +267,6 @@ async function refresh() {
       owner,
       currentDid: a.currentDid,
       originDid: a.originDid,
-      assetHash: a.assetHash,
       category: a.category,
       soulbound: a.soulbound,
       frozen: a.frozen,
@@ -180,7 +274,7 @@ async function refresh() {
     });
   }
 
-  state.perms = await RoleManager.permissionsOf(state.actor);
+  state.perms = state.actor ? await RoleManager.permissionsOf(state.actor) : 0n;
   const count = Number(await AuditTrail.entryCount());
   const entries = await AuditTrail.getEntries(count > 300 ? count - 300 : 0, 300);
 
@@ -197,7 +291,12 @@ const label = (addr) => state.labels.get((addr || "").toLowerCase()) ?? short(ad
 function gate() {
   document.querySelectorAll("[data-perm]").forEach((b) => {
     const need = b.dataset.perm;
-    const owned = b.dataset.owner && b.dataset.owner.toLowerCase() === state.actor.toLowerCase();
+    if (!state.actor) {
+      b.disabled = true;
+      b.title = "connect MetaMask";
+      return;
+    }
+    const owned = sameAddr(b.dataset.owner, state.actor);
     const allowed = owned || can(need);
     b.disabled = !allowed;
     b.title = allowed ? "" : `requires ${need}`;
@@ -206,15 +305,42 @@ function gate() {
 
 // -------------------------------------------------------------------- render
 
+function renderWallet() {
+  const btn = $("#connect");
+  const tag = $("#wallet-label");
+
+  if (!state.actor) {
+    tag.textContent = injected() ? "not connected" : "MetaMask not detected";
+    tag.className = "pill pill-muted";
+    btn.textContent = "Connect MetaMask";
+    btn.onclick = connect;
+    btn.disabled = false;
+    return;
+  }
+
+  const name = state.labels.get(state.actor.toLowerCase());
+  tag.textContent = (name ? name + " · " : "") + short(state.actor);
+  tag.className = state.wrongChain ? "pill pill-bad" : "pill pill-good";
+  btn.textContent = "Switch account";
+  btn.onclick = switchAccount;
+  btn.disabled = false;
+}
+
 function renderMe() {
-  const me = state.identities.find((i) => i.controller.toLowerCase() === state.actor.toLowerCase());
-  $("#me-key").textContent = state.actor;
-  $("#me-did").textContent = me ? `did:tcid:${state.cfg.chainId}:${me.controller.toLowerCase()}` : "not registered";
-  $("#me-status").innerHTML = me
-    ? me.revoked
-      ? `<span class="pill pill-bad">revoked</span>`
-      : `<span class="pill pill-good">active</span>`
-    : `<span class="pill pill-muted">no identity</span>`;
+  const me = state.identities.find((i) => sameAddr(i.controller, state.actor));
+  $("#me-key").textContent = state.actor ?? "no wallet connected";
+  $("#me-did").textContent = me
+    ? `did:tcid:${state.cfg.chainId}:${me.controller.toLowerCase()}`
+    : state.actor
+      ? "not registered"
+      : "–";
+  $("#me-status").innerHTML = !state.actor
+    ? `<span class="pill pill-muted">disconnected</span>`
+    : me
+      ? me.revoked
+        ? `<span class="pill pill-bad">revoked</span>`
+        : `<span class="pill pill-good">active</span>`
+      : `<span class="pill pill-muted">no identity</span>`;
   $("#me-roles").innerHTML = me && me.roles.length
     ? me.roles.map((r) => `<span class="chip role">${ROLE_NAME[r] ?? shortDid(r)}</span>`).join("")
     : `<span class="chip">none</span>`;
@@ -223,17 +349,20 @@ function renderMe() {
       .map(([n]) => `<span class="chip">${n}</span>`)
       .join("") || `<span class="chip">none</span>`;
 
-  $("#register-self").disabled = !!me;
-  $("#register-self").title = me ? "this key already controls an identity" : "";
+  const reg = $("#register-self");
+  reg.disabled = !state.actor || !!me;
+  reg.title = !state.actor ? "connect MetaMask" : me ? "this key already controls an identity" : "";
 }
 
 function renderIdentities() {
   const box = $("#identities");
   const target = $("#mint-to");
   const active = state.identities.filter((i) => !i.revoked);
+  const keep = target.value;
   target.innerHTML = active
     .map((i) => `<option value="${i.didHash}">${label(i.controller)} - ${shortDid(i.didHash)}</option>`)
     .join("");
+  if (keep && active.some((i) => i.didHash === keep)) target.value = keep;
 
   box.innerHTML = state.identities.length ? "" : `<div class="empty">No identities yet.</div>`;
   for (const i of state.identities) {
@@ -241,7 +370,7 @@ function renderIdentities() {
     el.className = "item";
     el.innerHTML = `
       <div class="head">
-        <span class="title">${label(i.controller)}</span>
+        <span class="title">${label(i.controller)}${sameAddr(i.controller, state.actor) ? " (you)" : ""}</span>
         ${i.revoked ? `<span class="pill pill-bad">revoked</span>` : `<span class="pill pill-good">active</span>`}
       </div>
       <div class="sub mono">${i.didHash}</div>
@@ -275,7 +404,7 @@ function renderAssets() {
   for (const a of live) {
     const el = document.createElement("div");
     el.className = "item";
-    const mine = a.owner.toLowerCase() === state.actor.toLowerCase();
+    const mine = sameAddr(a.owner, state.actor);
     el.innerHTML = `
       <div class="head">
         <span class="title">#${a.id} &middot; ${a.category}</span>
@@ -326,21 +455,20 @@ function renderAudit(entries, count) {
   $("#audit-count").textContent = `${count} entries`;
   const body = $("#audit tbody");
   body.innerHTML = "";
-  const offset = count - entries.length;
   [...entries].reverse().forEach((e, idx) => {
     const i = count - 1 - idx;
-    const tr = document.createElement("tr");
-    const subject = state.identities.find((x) => x.didHash === e.subject)
-      ? label(state.identities.find((x) => x.didHash === e.subject).controller)
+    const identity = state.identities.find((x) => x.didHash === e.subject);
+    const subject = identity
+      ? label(identity.controller)
       : ACTION_NAME[e.action]?.startsWith("ASSET")
         ? "#" + BigInt(e.subject).toString()
         : shortDid(e.subject);
+    const tr = document.createElement("tr");
     tr.innerHTML = `<td>${i}</td><td class="action">${ACTION_NAME[e.action] ?? shortDid(e.action)}</td>
       <td>${label(e.actor)}</td><td>${subject}</td><td>${e.blockNumber}</td>
       <td>${new Date(Number(e.timestamp) * 1000).toLocaleTimeString()}</td>`;
     body.append(tr);
   });
-  void offset;
 }
 
 // -------------------------------------------------------------------- writes

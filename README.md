@@ -114,12 +114,31 @@ npx hardhat run scripts/demo.js
 npx hardhat node          # terminal 1
 npm run seed:local        # terminal 2 - deploys and seeds 5 identities + 3 assets
 npm run web               # terminal 3 - http://127.0.0.1:5173/web/
+npm run accounts          # prints the demo keys to import into MetaMask
 ```
 
-Pick who you are acting as from the dropdown. The console reads your permission mask from
-the chain and disables what you are not allowed to do, but the contracts are the real
-guard: acting as `alice` and trying to move her soulbound clearance returns
-`AssetIsSoulbound` from the chain, not a client-side warning.
+**Signing is MetaMask's job.** The page holds no keys and no session. Reads go straight to
+the node, so the identities, assets, and audit trail render before you connect; every write
+is a transaction you approve in the wallet, and the acting identity is whichever account
+MetaMask has selected.
+
+To drive the demo you need the seeded accounts in your wallet:
+
+1. Add the network - MetaMask offers this automatically on connect, or add it by hand:
+   RPC `http://127.0.0.1:8545`, chain id `31337`, currency `ETH`.
+2. `npm run accounts` and import `admin`, `manager`, and `alice` (Account menu ->
+   Import account -> Private key). They are the public Hardhat test keys; never send them
+   real funds.
+3. Connect, then switch between them with **Switch account** to see the same page change
+   what it will let you do.
+
+The console disables what your permission mask does not cover, but the contracts are the
+real guard: connected as `alice`, moving her soulbound clearance returns `AssetIsSoulbound`
+from the chain, and calling `burn` straight from the console returns `NotAuthorized` -
+neither is a client-side warning.
+
+> Restarting the node resets the chain while MetaMask keeps the old nonces, so pending
+> transactions will hang. Settings -> Advanced -> **Clear activity tab data** fixes it.
 
 ### Deploying to a testnet
 
@@ -163,5 +182,8 @@ Deployment order matters, because the contracts verify each other: `AuditTrail` 
   "credential bound to an identity" case, but there is no VC issuance/presentation flow.
 - **No upgradeability.** The contracts are immutable by design; a migration would mean
   redeploying and re-anchoring identities.
+- **The demo keys are public.** `npm run accounts` prints the standard Hardhat development
+  keys so the walkthrough is reproducible. They are worthless by design; a real deployment
+  uses accounts MetaMask generated and this script has no reason to exist.
 - **`allDids` / `getEntries` are paginated reads** meant for a UI over a modest dataset. A
   production indexer should read the events instead.
