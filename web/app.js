@@ -50,6 +50,7 @@ const state = {
   actor: null, // connected wallet account, or null
   wrongChain: false,
   perms: 0n,
+  balance: 0n,
   labels: new Map(), // lowercase address -> friendly name from the seed script
   identities: [],
   assets: [],
@@ -339,10 +340,12 @@ async function readChain() {
   }
 
   state.perms = state.actor ? await RoleManager.permissionsOf(state.actor) : 0n;
+  state.balance = state.actor ? await state.provider.getBalance(state.actor) : 0n;
   const count = Number(await AuditTrail.entryCount());
   const entries = await AuditTrail.getEntries(count > 300 ? count - 300 : 0, 300);
 
   renderMe();
+  renderOnboarding();
   renderIdentities();
   renderAssets();
   renderAudit(entries, count);
@@ -430,6 +433,90 @@ function renderMe() {
   const reg = $("#register-self");
   reg.disabled = !state.actor || !!me;
   reg.title = !state.actor ? "connect MetaMask" : me ? "this key already controls an identity" : "";
+}
+
+/**
+ * A first-time visitor arrives here with a link and nothing else - no wallet, no test
+ * funds, no identity. This walks them from that state to a registered identity, and
+ * disappears once they are through it.
+ */
+function renderOnboarding() {
+  const panel = $("#onboarding");
+  const me = state.identities.find((i) => sameAddr(i.controller, state.actor));
+  const local = state.cfg.chainId === 31337;
+  const funded = state.balance > 0n;
+
+  const steps = [
+    {
+      done: !!injected(),
+      what: "Install MetaMask",
+      why: "A browser extension that holds your key and signs for you. There is no username or password on this platform - your wallet is your login.",
+      action: !injected()
+        ? `<a class="btn" href="https://metamask.io/download/" target="_blank" rel="noopener">Get MetaMask</a>
+           <span class="why">then reload this page</span>`
+        : "",
+    },
+    {
+      done: !!state.actor,
+      what: "Connect your wallet",
+      why: "This page never sees your key. It asks MetaMask to sign, and you approve each transaction yourself.",
+      action: !state.actor && injected() ? `<button class="small" id="onboard-connect">Connect MetaMask</button>` : "",
+    },
+  ];
+
+  if (!local) {
+    steps.push({
+      done: funded,
+      what: "Get free test ETH",
+      why: funded
+        ? `Balance ${(+ethers.formatEther(state.balance)).toFixed(4)} ETH - enough for hundreds of actions.`
+        : `Sepolia is a test network, so its ETH is not real money and costs nothing. A faucet sends you some free.${
+            state.actor ? ` Paste your address: <code>${state.actor}</code>` : " Connect first to see your address."
+          }`,
+      action:
+        !funded && state.actor
+          ? `<a class="btn" href="https://cloud.google.com/application/web3/faucet/ethereum/sepolia" target="_blank" rel="noopener">Open the faucet</a>
+             <a class="btn ghost" href="${state.cfg.explorer}/address/${state.actor}" target="_blank" rel="noopener">Check it arrived</a>`
+          : "",
+    });
+  }
+
+  steps.push({
+    done: !!me && !me.revoked,
+    what: "Register your identity",
+    why: me
+      ? "Done - you now have a decentralised identifier on the blockchain. An admin can grant you a role from here."
+      : "Creates your DID on-chain. It costs one small transaction and is yours alone; nobody can create it for you without your signature.",
+    action: !me && state.actor && funded ? `<button class="small" id="onboard-register">Register my identity</button>` : "",
+  });
+
+  const doneCount = steps.filter((x) => x.done).length;
+  if (doneCount === steps.length) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  $("#onboard-progress").textContent = `step ${Math.min(doneCount + 1, steps.length)} of ${steps.length}`;
+
+  const firstOpen = steps.findIndex((x) => !x.done);
+  $("#onboard-steps").innerHTML = steps
+    .map((x, i) => {
+      const cls = x.done ? "done" : i === firstOpen ? "active" : "";
+      return `<li class="${cls}">
+        <span class="marker">${x.done ? "&check;" : i + 1}</span>
+        <div class="body">
+          <span class="what">${x.what}</span>
+          <span class="why">${x.why}</span>
+          ${x.action ? `<div class="row">${x.action}</div>` : ""}
+        </div>
+      </li>`;
+    })
+    .join("");
+
+  const c = $("#onboard-connect");
+  if (c) c.onclick = connect;
+  const r = $("#onboard-register");
+  if (r) r.onclick = registerSelf;
 }
 
 function renderIdentities() {
@@ -552,8 +639,9 @@ function renderAudit(entries, count) {
 // -------------------------------------------------------------------- writes
 
 function registerSelf() {
+  const name = state.labels.get(state.actor.toLowerCase()) ?? state.actor.toLowerCase();
   return send("Register identity", async () =>
-    (await writer("DIDRegistry")).register(`ipfs://did-document/${label(state.actor)}`)
+    (await writer("DIDRegistry")).register(`ipfs://did-document/${name}`)
   );
 }
 
