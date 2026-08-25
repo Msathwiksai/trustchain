@@ -46,6 +46,15 @@
           <h2>Identities</h2>
           <button class="ghost" id="register-self">Register my identity</button>
         </header>
+        <form class="form" id="approve-form" hidden>
+          <label>Identity request from someone with no ETH
+            <input id="approve-code" placeholder="paste their request code" />
+          </label>
+          <div class="row bottom">
+            <span class="why" id="approve-preview">They sign; you submit and pay the gas.</span>
+            <button id="approve-btn" data-perm="REGISTER_IDENTITY">Approve &amp; register</button>
+          </div>
+        </form>
         <div class="list" id="identities"></div>
       </section>
 

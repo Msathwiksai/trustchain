@@ -51,6 +51,7 @@ const state = {
   wrongChain: false,
   perms: 0n,
   balance: 0n,
+  request: null, // signed identity request awaiting an administrator
   labels: new Map(), // lowercase address -> friendly name from the seed script
   identities: [],
   assets: [],
@@ -127,6 +128,8 @@ async function boot() {
   $("#connect").onclick = connect;
   $("#register-self").onclick = registerSelf;
   $("#mint-form").onsubmit = mint;
+  $("#approve-form").onsubmit = approveRequest;
+  $("#approve-code").oninput = previewRequest;
 
   if (injected()) {
     injected().on?.("accountsChanged", (accts) => {
@@ -272,6 +275,20 @@ async function send(label, fn) {
   await refresh();
 }
 
+/** Clipboard where it is allowed, text selection where it is not. */
+function copyText(text, btn, label) {
+  const restore = btn.textContent;
+  const done = (m) => {
+    btn.textContent = m;
+    setTimeout(() => (btn.textContent = restore), 1600);
+  };
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).then(() => done(label), () => done("Select it manually"));
+  } else {
+    done("Select it manually");
+  }
+}
+
 function toast(title, detail, kind = "", persist = false) {
   const el = document.createElement("div");
   el.className = "toast " + kind;
@@ -281,6 +298,82 @@ function toast(title, detail, kind = "", persist = false) {
   $("#toasts").append(el);
   if (kind && !persist) setTimeout(() => el.remove(), 6000);
   return el;
+}
+
+// ----------------------------------------------- identity without any funds
+
+/**
+ * A newcomer has no ETH, and telling them to visit a faucet before they can do anything
+ * is the worst first impression this platform can make. It does not need to: the registry
+ * accepts an EIP-712 consent signature from the subject, submitted and paid for by anyone
+ * holding REGISTER_IDENTITY.
+ *
+ * So the newcomer signs - free, instant, no balance - and hands the resulting code to an
+ * administrator, who approves it. The signature is what makes it safe: the administrator
+ * is paying, not impersonating, and cannot alter a single field without the contract
+ * rejecting it.
+ */
+function registrationTypes() {
+  return {
+    RegisterIdentity: [
+      { name: "subject", type: "address" },
+      { name: "docURI", type: "string" },
+      { name: "nonce", type: "uint256" },
+      { name: "deadline", type: "uint256" },
+    ],
+  };
+}
+
+async function signIdentityRequest() {
+  if (!state.actor) return toast("Request identity", "connect MetaMask first", "err");
+  try {
+    const docURI = `ipfs://did-document/${state.actor.toLowerCase()}`;
+    const deadline = Math.floor(Date.now() / 1000) + 7 * 24 * 3600;
+    const nonce = await state.read.DIDRegistry.nonces(state.actor);
+
+    const signer = await state.wallet.getSigner(state.actor);
+    const signature = await signer.signTypedData(
+      {
+        name: "TrustChainDIDRegistry",
+        version: "1",
+        chainId: state.cfg.chainId,
+        verifyingContract: state.cfg.didRegistry,
+      },
+      registrationTypes(),
+      { subject: state.actor, docURI, nonce, deadline }
+    );
+
+    state.request = btoa(JSON.stringify({ subject: state.actor, docURI, deadline, signature }));
+    toast("Signed", "no gas was spent - give the code to an administrator", "ok");
+    renderOnboarding();
+  } catch (e) {
+    toast("Signing failed", errName(e), "err");
+  }
+}
+
+function decodeRequest(code) {
+  const r = JSON.parse(atob(code.trim()));
+  if (!r.subject || !r.docURI || !r.deadline || !r.signature) throw new Error("incomplete request");
+  ethers.getAddress(r.subject);
+  return r;
+}
+
+function approveRequest(ev) {
+  ev.preventDefault();
+  let r;
+  try {
+    r = decodeRequest($("#approve-code").value);
+  } catch {
+    return toast("Approve", "that does not look like a request code", "err");
+  }
+  if (r.deadline * 1000 < Date.now()) return toast("Approve", "this request has expired", "err");
+
+  return send("Register identity", async () =>
+    (await writer("DIDRegistry")).registerFor(r.subject, r.docURI, r.deadline, r.signature)
+  ).then(() => {
+    $("#approve-code").value = "";
+    $("#approve-preview").textContent = "They sign; you submit and pay the gas.";
+  });
 }
 
 // --------------------------------------------------------------------- reads
@@ -341,6 +434,9 @@ async function readChain() {
 
   state.perms = state.actor ? await RoleManager.permissionsOf(state.actor) : 0n;
   state.balance = state.actor ? await state.provider.getBalance(state.actor) : 0n;
+  if (state.request && state.identities.some((i) => sameAddr(i.controller, state.actor))) {
+    state.request = null; // an administrator approved it
+  }
   const count = Number(await AuditTrail.entryCount());
   const entries = await AuditTrail.getEntries(count > 300 ? count - 300 : 0, 300);
 
@@ -464,30 +560,43 @@ function renderOnboarding() {
     },
   ];
 
-  if (!local) {
-    steps.push({
-      done: funded,
-      what: "Get free test ETH",
-      why: funded
-        ? `Balance ${(+ethers.formatEther(state.balance)).toFixed(4)} ETH - enough for hundreds of actions.`
-        : `Sepolia is a test network, so its ETH is not real money and costs nothing. A faucet sends you some free.${
-            state.actor ? ` Paste your address: <code>${state.actor}</code>` : " Connect first to see your address."
-          }`,
-      action:
-        !funded && state.actor
-          ? `<a class="btn" href="https://cloud.google.com/application/web3/faucet/ethereum/sepolia" target="_blank" rel="noopener">Open the faucet</a>
-             <a class="btn ghost" href="${state.cfg.explorer}/address/${state.actor}" target="_blank" rel="noopener">Check it arrived</a>`
-          : "",
-    });
-  }
-
+  // Getting an identity is the only step that matters, and it does not require funds:
+  // the free route is the default, with self-funding offered as the alternative.
+  const registered = !!me && !me.revoked;
   steps.push({
-    done: !!me && !me.revoked,
-    what: "Register your identity",
-    why: me
-      ? "Done - you now have a decentralised identifier on the blockchain. An admin can grant you a role from here."
-      : "Creates your DID on-chain. It costs one small transaction and is yours alone; nobody can create it for you without your signature.",
-    action: !me && state.actor && funded ? `<button class="small" id="onboard-register">Register my identity</button>` : "",
+    done: registered,
+    what: "Get your identity",
+    why: registered
+      ? "Done - you hold a decentralised identifier on the blockchain. An administrator can now grant you a role."
+      : state.request
+        ? "Signed. Send this code to an administrator - they submit it and pay. Nothing was spent, and nobody can alter it without invalidating your signature."
+        : local
+          ? "Creates your DID on-chain."
+          : "You do not need any ETH for this. Sign a request and an administrator submits it for you.",
+    action: registered
+      ? ""
+      : state.request
+        ? `<div class="request-code" id="request-code">${state.request}</div>
+           <div class="row"><button class="small" id="copy-request">Copy code</button>
+           <span class="why">waiting for an administrator to approve it</span></div>`
+        : state.actor
+          ? `<button class="small" id="onboard-sign">Sign a request &mdash; free, no ETH</button>
+             ${
+               funded
+                 ? `<button class="small ghost" id="onboard-register">Or register it myself</button>`
+                 : `<span class="why">or fund yourself to do it directly</span>`
+             }
+             ${
+               local || funded
+                 ? ""
+                 : `<div class="alt">Acting for yourself later - minting, freezing, transferring - does need
+                    a little test ETH. It is free and not real money.
+                    <div class="row" style="margin-top:6px">
+                      <button class="small ghost" id="copy-address">Copy my address</button>
+                      <a class="btn ghost" href="https://cloud.google.com/application/web3/faucet/ethereum/sepolia" target="_blank" rel="noopener">Open the faucet</a>
+                    </div></div>`
+             }`
+          : "",
   });
 
   const doneCount = steps.filter((x) => x.done).length;
@@ -517,9 +626,35 @@ function renderOnboarding() {
   if (c) c.onclick = connect;
   const r = $("#onboard-register");
   if (r) r.onclick = registerSelf;
+  const sg = $("#onboard-sign");
+  if (sg) sg.onclick = signIdentityRequest;
+
+  const cp = $("#copy-request");
+  if (cp) cp.onclick = () => copyText(state.request, cp, "Copied");
+  const ca = $("#copy-address");
+  if (ca) ca.onclick = () => copyText(state.actor, ca, "Copied");
+}
+
+function previewRequest() {
+  const el = $("#approve-preview");
+  const raw = $("#approve-code").value.trim();
+  if (!raw) {
+    el.textContent = "They sign; you submit and pay the gas.";
+    return;
+  }
+  try {
+    const r = decodeRequest(raw);
+    const expired = r.deadline * 1000 < Date.now();
+    el.textContent = expired
+      ? `Request from ${short(r.subject)} has expired`
+      : `Request from ${r.subject} - signed by them, gas paid by you`;
+  } catch {
+    el.textContent = "Not a valid request code";
+  }
 }
 
 function renderIdentities() {
+  $("#approve-form").hidden = !can("REGISTER_IDENTITY");
   const box = $("#identities");
   const target = $("#mint-to");
   const active = state.identities.filter((i) => !i.revoked);
