@@ -42,4 +42,13 @@ http
       res.end(buf);
     });
   })
+  .on("error", (e) => {
+    if (e.code === "EADDRINUSE") {
+      // Almost always a console already running in another window, not a problem.
+      console.log(`Already serving on http://127.0.0.1:${PORT}/web/ - open it in a browser.`);
+      console.log(`(To move it elsewhere: PORT=5174 npm run web)`);
+      return;
+    }
+    throw e;
+  })
   .listen(PORT, () => console.log(`Web console on http://127.0.0.1:${PORT}/web/`));
