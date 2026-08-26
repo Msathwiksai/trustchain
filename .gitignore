@@ -5,3 +5,4 @@ typechain-types/
 .env
 *.log
 public/
+RUNBOOK.md
