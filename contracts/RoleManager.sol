@@ -267,12 +267,12 @@ contract RoleManager is IRoleManager {
     /// @notice Every role currently live for an identity.
     function rolesOfDid(bytes32 didHash) external view returns (bytes32[] memory live) {
         bytes32[] storage held = _rolesOf[didHash];
-        uint256 n;
+        uint256 n = 0;
         for (uint256 i = 0; i < held.length; ++i) {
             if (_isLive(_grants[didHash][held[i]])) ++n;
         }
         live = new bytes32[](n);
-        uint256 j;
+        uint256 j = 0;
         for (uint256 i = 0; i < held.length; ++i) {
             if (_isLive(_grants[didHash][held[i]])) live[j++] = held[i];
         }

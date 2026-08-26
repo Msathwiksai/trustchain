@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {IAuditTrail} from "./interfaces/IPlatform.sol";
+
 /**
  * @title AuditTrail
  * @notice Append-only ledger of every privileged action on the platform.
  *         Entries can never be edited or deleted - there is no code path that writes
  *         to an existing index. Only registered platform contracts may append.
  */
-contract AuditTrail {
+contract AuditTrail is IAuditTrail {
     struct Entry {
         uint64 timestamp;
         uint64 blockNumber;
@@ -78,6 +80,7 @@ contract AuditTrail {
     /// @notice Append one immutable entry. Callable only by registered platform contracts.
     function record(address actor, bytes32 action, bytes32 subject, bytes32 dataHash)
         external
+        override
         returns (uint256 id)
     {
         if (!isWriter[msg.sender]) revert NotWriter();

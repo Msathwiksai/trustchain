@@ -157,8 +157,9 @@ contract AssetNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ReentrancyGuard
         if (to == address(0)) revert ZeroAddress();
         if (_ownerOf(tokenId) != from) revert NotAuthorized();
         _custodial = true;
+        // _update clears the marker before it makes any external call, so there is no
+        // state write left dangling afterwards for a reentrant caller to observe.
         _update(to, tokenId, address(0)); // address(0) auth: skips the owner/approval check
-        _custodial = false;
     }
 
     /**
@@ -276,12 +277,16 @@ contract AssetNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ReentrancyGuard
             bytes32 fromDid = a.currentDid;
             a.currentDid = toDid;
 
-            emit AssetTransferred(tokenId, fromDid, toDid, msg.sender, _custodial);
+            // Consume the marker here, before the audit call leaves this contract.
+            bool custodial = _custodial;
+            _custodial = false;
+
+            emit AssetTransferred(tokenId, fromDid, toDid, msg.sender, custodial);
             auditTrail.record(
                 msg.sender,
                 Actions.ASSET_TRANSFERRED,
                 bytes32(tokenId),
-                keccak256(abi.encode(fromDid, toDid, _custodial))
+                keccak256(abi.encode(fromDid, toDid, custodial))
             );
         }
     }

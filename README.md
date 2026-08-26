@@ -242,6 +242,32 @@ rendering, because a page that signs transactions must never execute a stranger'
 
 ---
 
+## Static analysis
+
+[Slither](https://github.com/crytic/slither) 0.11.6 across all four contracts:
+
+```
+slither . --exclude-dependencies --filter-paths "node_modules|contracts/test"
+```
+
+**Fixed as a result** (42 findings down to 38):
+
+| Finding | Change |
+| --- | --- |
+| `reentrancy-no-eth` — `_custodial` written after an external call | `_update` now consumes the marker into a local and clears it *before* the audit call leaves the contract, so no state write follows an external call at all |
+| `missing-inheritance` — `AuditTrail` implements `IAuditTrail` without declaring it | It now inherits the interface, so the compiler checks the shape instead of a human remembering to |
+| `uninitialized-local` ×2 | Explicit zeros in `rolesOfDid` |
+
+**Reviewed and accepted.** Every remaining finding was checked against the code rather than waved away:
+
+- **`uninitialized-state` on `_guardianSets` (High).** A false positive. It is a mapping, written through a storage pointer (`GuardianSet storage set = _guardianSets[didHash]`), which the detector does not follow. `test/recovery.test.js` writes a guardian set and reads it back, so the storage is demonstrably live.
+- **`unused-return` ×20.** Every one is `auditTrail.record(...)`, which returns the new entry id. Callers legitimately do not need it; the entry is written either way, and its index is in the emitted event.
+- **`incorrect-equality` ×4.** All are `mintedAt == 0` or `createdAt == 0`, existence checks on a struct field this contract sets itself. The detector is aimed at strict equality against balances or block values, neither of which is involved.
+- **`timestamp` ×12 (Low).** Role expiry and the recovery veto window are measured in hours and days. A validator can nudge a timestamp by seconds; nothing here turns on that precision.
+- **`dead-code` on `_increaseBalance`.** Required override for `ERC721` + `ERC721Enumerable`; it is called by the base contracts, not by ours.
+
+---
+
 ## Known limits
 
 - **Governance is a single root admin.** The first `ADMIN` is bootstrapped at deploy. For
