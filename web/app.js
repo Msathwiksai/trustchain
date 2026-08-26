@@ -65,6 +65,7 @@ const state = {
   request: null, // signed identity request awaiting an administrator
   requestName: "",
   refreshing: false,
+  spotlightUntil: 0,
   labels: new Map(), // lowercase address -> friendly name from the seed script
   identities: [],
   assets: [],
@@ -164,6 +165,8 @@ async function boot() {
     if (existing?.length) await connect({ silent: true });
   }
 
+  initHelp();
+  initGuide();
   renderWallet();
   await refresh();
   setInterval(refresh, 8000);
@@ -443,6 +446,193 @@ function approveRequest(ev) {
   });
 }
 
+/**
+ * One line per control, in the words someone actually needs: what it does, and who is
+ * allowed to use it. Deterministic, offline, and it cannot invent an answer.
+ */
+const HELP = {
+  did: "This person's permanent identity. It never changes, even if they move to a new wallet - which is why their roles and assets survive a lost key.",
+  key: "The wallet controlling this identity right now. This CAN change, through key rotation or guardian recovery. The DID above stays the same.",
+  docuri: "A pointer to their identity document, stored off-chain. The pointer is public; the document is not.",
+  rolechip: "The role this identity holds. Permissions come from the role, so taking the role away removes all of them at once.",
+  rolepick: "Choose which role to give or take away. Careful: this starts on ADMIN, which grants every permission on the platform.",
+  grant: "Gives the selected role to this person. Needs MANAGE_ROLES, and you can only grant roles you administer - a Manager can create Users but never another Manager.",
+  revokerole: "Takes the selected role away. They keep their identity and any other roles; only this one's permissions stop working.",
+  revokeid: "Kills the identity itself. Every role dies at once and it cannot be undone. Use it when someone leaves the organisation - not to remove one permission.",
+  approve: "Paste the code someone signed on their own device. You submit it and pay the gas; their signature is what authorises it, so you cannot change a single field of what they agreed to.",
+  mintto: "Which identity receives this asset. It must be a registered, active identity - assets cannot be issued into thin air.",
+  category: "What kind of thing this is: a degree certificate, a property title, a laptop. Free text, shown to anyone inspecting the asset.",
+  uri: "Where the full record lives off-chain, e.g. on IPFS. Public, so it should not name anything sensitive.",
+  source: "Pick the actual file and its bytes are hashed here in your browser. That hash is what gets committed, so a later copy that differs by even one character will fail verification.",
+  soulbound: "Tick this for anything that should never change hands: a degree, a licence, a clearance. Soulbound assets cannot be transferred by anyone, including you.",
+  mint: "Issues the asset on-chain to the chosen identity, with you recorded as the issuer. Needs MINT_ASSET.",
+  transfer: "Moves the asset to another identity. You can move your own; moving somebody else's needs TRANSFER_ASSET and is logged as a custodial action.",
+  freeze: "Temporarily stops an asset moving, for a dispute or an investigation. It stays valid and verifiable - it just cannot change hands. Needs FREEZE_ASSET.",
+  revokeasset: "Rescinds a credential without deleting it: a degree withdrawn, a licence lapsed. It stops verifying as valid, but the record stays so the history remains honest. Only the issuer, or REVOKE_ASSET.",
+  burn: "Destroys the asset entirely. Prefer Revoke for a credential - burning erases the record, which is usually the wrong thing for an audit. Needs BURN_ASSET.",
+  verifyfile: "Choose the file someone handed you. Your browser hashes it and compares against what was committed at issuance, then tells you authentic, altered, or revoked.",
+  audit: "Every privileged action, written by the contract that performed it, in the same transaction. Nothing here can be edited or deleted by anyone, including an administrator.",
+  network: "Which blockchain this page is reading. Your wallet must be on the same one to sign anything.",
+};
+
+const helpBtn = (key) => `<button type="button" class="help" data-help="${key}" aria-label="What is this?">?</button>`;
+
+function initHelp() {
+  // Markup-declared slots, so static controls get the same "?" as generated rows.
+  document.querySelectorAll(".helpslot").forEach((slot) => {
+    slot.innerHTML = helpBtn(slot.dataset.helpKey);
+  });
+
+  const pop = $("#help-pop");
+  document.addEventListener("click", (ev) => {
+    const btn = ev.target.closest?.("button.help");
+    if (!btn) {
+      pop.hidden = true;
+      return;
+    }
+    ev.preventDefault();
+    pop.textContent = HELP[btn.dataset.help] ?? "";
+    pop.hidden = false;
+    const r = btn.getBoundingClientRect();
+    pop.style.top = `${window.scrollY + r.bottom + 8}px`;
+    pop.style.left = `${Math.max(12, Math.min(window.scrollX + r.left - 8, window.innerWidth - 316))}px`;
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") pop.hidden = true;
+  });
+}
+
+// ------------------------------------------------------------- guided tour
+
+const GUIDES = [
+  {
+    id: "role",
+    title: "Give someone a role",
+    why: "New people arrive with an identity and no permissions at all. This is how they get access.",
+    steps: [
+      { txt: "Find them in <b>Identities</b>. Someone new sits at the top with an amber <b>awaiting access</b> chip.", sel: "#identities" },
+      { txt: "In their row, open the dropdown and choose the role. <b>It starts on ADMIN</b> - change it unless you really mean administrator.", sel: "#identities .role-pick" },
+      { txt: "Click <b>Grant</b> and approve in MetaMask.", sel: "#identities .grant" },
+      { txt: "They refresh their page and their new permissions are live." },
+    ],
+  },
+  {
+    id: "onboard",
+    title: "Add someone with no crypto",
+    why: "They need no ETH and no faucet. They sign; you submit and pay.",
+    steps: [
+      { txt: "Send them your console link. They install MetaMask, connect, type their name and click <b>Sign a request</b>." },
+      { txt: "They click <b>Copy code</b> and send you that text - WhatsApp is fine, it is not secret." },
+      { txt: "Paste it into <b>Identity request from someone with no ETH</b>.", sel: "#approve-code" },
+      { txt: "Check the preview names the right person, then click <b>Approve &amp; register</b>.", sel: "#approve-btn" },
+      { txt: "They appear in your list as <b>awaiting access</b>. Give them a role using the guide above." },
+    ],
+  },
+  {
+    id: "issue",
+    title: "Issue a certificate",
+    why: "The organisation commits a fingerprint of the real document, so any later copy that differs can be caught.",
+    steps: [
+      { txt: "In <b>Assets</b>, choose who receives it under <b>Allocate to</b>.", sel: "#mint-to" },
+      { txt: "Set a <b>Category</b> such as degree-certificate.", sel: "#mint-category" },
+      { txt: "Click <b>Hash a real file</b> and pick the actual document. Its bytes are hashed in your browser.", sel: "#mint-file" },
+      { txt: "Tick <b>Soulbound</b> for anything that must never change hands, like a degree.", sel: "#mint-soulbound" },
+      { txt: "Click <b>Mint asset NFT</b> and approve in MetaMask.", sel: "#mint-btn" },
+    ],
+  },
+  {
+    id: "verify",
+    title: "Check a certificate is genuine",
+    why: "This is the demo worth showing a judge. Let them edit the file first.",
+    steps: [
+      { txt: "Find the asset and click <b>Verify a file</b>.", sel: "#assets .filebtn" },
+      { txt: "Choose the file you were handed. Nothing is uploaded - it is hashed in your browser." },
+      { txt: "You get one of: <b>AUTHENTIC</b> with the issuer named, <b>ALTERED</b>, or <b>REVOKED</b>." },
+      { txt: "Change one character of the file and try again. It fails, because the hash changes." },
+    ],
+  },
+  {
+    id: "remove",
+    title: "Take access away",
+    why: "Two different things, often confused. Pick the smaller one unless you mean the larger.",
+    steps: [
+      { txt: "<b>Revoke role</b> removes one role. They keep their identity and any other roles.", sel: "#identities .revoke-role" },
+      { txt: "<b>Revoke identity</b> kills the identity itself - every role at once, permanently. For someone leaving.", sel: "#identities .revoke-id" },
+      { txt: "For a certificate that should stop being valid, use <b>Revoke</b> on the asset instead. It keeps the record.", sel: "#assets .revoke-asset" },
+      { txt: "Either way it lands in the audit trail with your name against it.", sel: "#audit" },
+    ],
+  },
+  {
+    id: "prove",
+    title: "Prove it is a real blockchain",
+    why: "Do not ask a judge to believe you. Hand them the check.",
+    steps: [
+      { txt: "Note the number in the <b>Audit trail</b> header.", sel: "#audit-count" },
+      { txt: "Ask them to open the contract on Etherscan and read <b>entryCount</b> themselves - no wallet needed.", sel: "#status" },
+      { txt: "It matches. Now do something here - mint an asset, grant a role." },
+      { txt: "Ask them to refresh. The number went up on a server neither of you controls." },
+    ],
+  },
+];
+
+function initGuide() {
+  const panel = $("#guide");
+  const tasks = $("#guide-tasks");
+
+  tasks.innerHTML = GUIDES.map(
+    (g, i) => `<button type="button" data-guide="${g.id}" aria-selected="${i === 0}">${g.title}</button>`
+  ).join("");
+
+  const show = (id) => {
+    const g = GUIDES.find((x) => x.id === id) ?? GUIDES[0];
+    tasks.querySelectorAll("button").forEach((b) =>
+      b.setAttribute("aria-selected", String(b.dataset.guide === g.id))
+    );
+    $("#guide-steps").innerHTML = `
+      <p class="why">${g.why}</p>
+      <ol>${g.steps
+        .map(
+          (st, i) => `<li><span class="n">${i + 1}</span><span class="txt">${st.txt}${
+            st.sel ? `<button type="button" class="showme" data-sel="${st.sel}">show me</button>` : ""
+          }</span></li>`
+        )
+        .join("")}</ol>`;
+
+    $("#guide-steps")
+      .querySelectorAll("button.showme")
+      .forEach((b) => (b.onclick = () => spotlight(b.dataset.sel)));
+  };
+
+  tasks.onclick = (ev) => {
+    const b = ev.target.closest("button[data-guide]");
+    if (b) show(b.dataset.guide);
+  };
+
+  $("#guide-toggle").onclick = () => {
+    panel.hidden = !panel.hidden;
+    $("#guide-toggle").textContent = panel.hidden ? "Show me how" : "Hide guide";
+    if (!panel.hidden) panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  };
+  $("#guide-close").onclick = () => {
+    panel.hidden = true;
+    $("#guide-toggle").textContent = "Show me how";
+  };
+
+  show(GUIDES[0].id);
+}
+
+/** Scroll a control into view and flash a ring around it, so "click Grant" means something. */
+function spotlight(selector) {
+  const el = document.querySelector(selector);
+  if (!el) return toast("Not on screen", "that control appears once there is something to act on", "err");
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.classList.remove("spotlight");
+  void el.offsetWidth; // restart the animation
+  el.classList.add("spotlight");
+  state.spotlightUntil = Date.now() + 2400;
+  setTimeout(() => el.classList.remove("spotlight"), 2200);
+}
+
 // --------------------------------------------------------------------- reads
 
 /**
@@ -467,6 +657,9 @@ async function refresh() {
   // A poll that is still in flight must finish before the next one starts, or two
   // interleaved reads render out of order and the page appears to flicker.
   if (state.refreshing) return;
+  // A poll that re-renders mid-highlight silently replaces the element the guide is
+  // pointing at, so hold off for the couple of seconds the spotlight is up.
+  if (state.spotlightUntil && Date.now() < state.spotlightUntil) return;
   state.refreshing = true;
   try {
     await readChain();
@@ -808,8 +1001,8 @@ function renderIdentities() {
         )}${sameAddr(i.controller, state.actor) ? " (you)" : ""}</span>
         ${i.revoked ? `<span class="pill pill-bad">revoked</span>` : `<span class="pill pill-good">active</span>`}
       </div>
-      <div class="sub mono">${esc(i.didHash)}</div>
-      <div class="sub mono">key ${esc(i.controller)} &middot; ${esc(i.docURI)}</div>
+      <div class="sub mono">${esc(i.didHash)} ${helpBtn("did")}</div>
+      <div class="sub mono">key ${esc(i.controller)} ${helpBtn("key")} &middot; ${esc(i.docURI)} ${helpBtn("docuri")}</div>
       <div class="chips">
         ${
           i.roles.map((r) => `<span class="chip role">${ROLE_NAME[r] ?? shortDid(r)}</span>`).join("") ||
@@ -819,10 +1012,10 @@ function renderIdentities() {
         }
       </div>
       <div class="actions">
-        <select class="role-pick">${ROLE_LIST.map((r) => `<option value="${ROLE_ID[r]}">${r}</option>`).join("")}</select>
-        <button class="small grant" data-perm="MANAGE_ROLES">Grant</button>
-        <button class="small ghost revoke-role" data-perm="MANAGE_ROLES">Revoke role</button>
-        <button class="small danger revoke-id" data-perm="REVOKE_IDENTITY" data-owner="${i.controller}">Revoke identity</button>
+        <select class="role-pick">${ROLE_LIST.map((r) => `<option value="${ROLE_ID[r]}">${r}</option>`).join("")}</select>${helpBtn("rolepick")}
+        <button class="small grant" data-perm="MANAGE_ROLES">Grant</button>${helpBtn("grant")}
+        <button class="small ghost revoke-role" data-perm="MANAGE_ROLES">Revoke role</button>${helpBtn("revokerole")}
+        <button class="small danger revoke-id" data-perm="REVOKE_IDENTITY" data-owner="${i.controller}">Revoke identity</button>${helpBtn("revokeid")}
       </div>`;
 
     const role = () => el.querySelector(".role-pick").value;
@@ -869,13 +1062,13 @@ function renderAssets() {
           .filter((i) => !i.revoked && i.didHash !== a.currentDid)
           .map((i) => `<option value="${esc(i.controller)}">to ${esc(label(i.controller))}</option>`)
           .join("")}</select>
-        <button class="small move" data-perm="TRANSFER_ASSET" data-owner="${a.owner}">Transfer</button>
-        <button class="small ghost freeze" data-perm="FREEZE_ASSET">${a.frozen ? "Unfreeze" : "Freeze"}</button>
-        <button class="small danger revoke-asset" data-perm="REVOKE_ASSET">${a.revoked ? "Reinstate" : "Revoke"}</button>
-        <button class="small danger burn" data-perm="BURN_ASSET">Burn</button>
+        <button class="small move" data-perm="TRANSFER_ASSET" data-owner="${a.owner}">Transfer</button>${helpBtn("transfer")}
+        <button class="small ghost freeze" data-perm="FREEZE_ASSET">${a.frozen ? "Unfreeze" : "Freeze"}</button>${helpBtn("freeze")}
+        <button class="small danger revoke-asset" data-perm="REVOKE_ASSET">${a.revoked ? "Reinstate" : "Revoke"}</button>${helpBtn("revokeasset")}
+        <button class="small danger burn" data-perm="BURN_ASSET">Burn</button>${helpBtn("burn")}
         <label class="filebtn" title="Check a file against the hash recorded at issuance">
           Verify a file<input type="file" class="verify-file" hidden />
-        </label>
+        </label>${helpBtn("verifyfile")}
         <input class="verify" placeholder="or a typed reference" />
         <button class="small ghost check">Check</button>
       </div>`;

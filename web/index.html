@@ -19,12 +19,24 @@
         <label>Acting as</label>
         <select id="network" hidden></select>
         <span id="wallet-label" class="pill pill-muted">not connected</span>
+        <button class="ghost" id="guide-toggle">Show me how</button>
         <button id="connect">Connect MetaMask</button>
         <span id="status" class="pill pill-muted">connecting…</span>
       </div>
     </header>
 
     <div class="mismatch" id="mismatch" hidden></div>
+
+    <section class="panel guide" id="guide" hidden>
+      <header>
+        <h2>How to use this</h2>
+        <button class="ghost small" id="guide-close">Close</button>
+      </header>
+      <div class="guide-body">
+        <nav class="guide-tasks" id="guide-tasks"></nav>
+        <div class="guide-steps" id="guide-steps"></div>
+      </div>
+    </section>
 
     <section class="identity-bar" id="identity-bar">
       <div class="field"><span class="k">DID</span><span class="v mono" id="me-did">–</span></div>
@@ -55,7 +67,7 @@
           </label>
           <div class="row bottom">
             <span class="why" id="approve-preview">They sign; you submit and pay the gas.</span>
-            <button id="approve-btn" data-perm="REGISTER_IDENTITY">Approve &amp; register</button>
+            <button id="approve-btn" data-perm="REGISTER_IDENTITY">Approve &amp; register</button><span class="helpslot" data-help-key="approve"></span>
           </div>
         </form>
         <div class="list" id="identities"></div>
@@ -65,20 +77,20 @@
         <header><h2>Assets</h2></header>
         <form class="form" id="mint-form">
           <div class="row">
-            <label>Allocate to<select id="mint-to"></select></label>
-            <label>Category<input id="mint-category" value="property-title" /></label>
+            <label>Allocate to<select id="mint-to"></select><span class="helpslot" data-help-key="mintto"></span></label>
+            <label>Category<input id="mint-category" value="property-title" /><span class="helpslot" data-help-key="category"></span></label>
           </div>
           <div class="row">
-            <label>Metadata URI<input id="mint-uri" value="ipfs://asset/new" /></label>
+            <label>Metadata URI<input id="mint-uri" value="ipfs://asset/new" /><span class="helpslot" data-help-key="uri"></span></label>
             <label>Source document
               <input id="mint-source" value="deed-2026-0042.pdf" />
-              <label class="filebtn inline">Hash a real file<input type="file" id="mint-file" hidden /></label>
+              <label class="filebtn inline">Hash a real file<input type="file" id="mint-file" hidden /></label><span class="helpslot" data-help-key="source"></span>
               <span class="filehash" id="mint-file-hash"></span>
             </label>
           </div>
           <div class="row bottom">
-            <label class="check"><input type="checkbox" id="mint-soulbound" /> Soulbound (never transferable)</label>
-            <button id="mint-btn" data-perm="MINT_ASSET">Mint asset NFT</button>
+            <label class="check"><input type="checkbox" id="mint-soulbound" /> Soulbound (never transferable)<span class="helpslot" data-help-key="soulbound"></span></label>
+            <button id="mint-btn" data-perm="MINT_ASSET">Mint asset NFT</button><span class="helpslot" data-help-key="mint"></span>
           </div>
         </form>
         <div class="list" id="assets"></div>
@@ -86,7 +98,7 @@
 
       <section class="panel audit">
         <header>
-          <h2>Audit trail</h2>
+          <h2>Audit trail</h2><span class="helpslot" data-help-key="audit"></span>
           <span class="pill pill-muted" id="audit-count">0 entries</span>
         </header>
         <div class="table-wrap">
@@ -101,6 +113,7 @@
     </main>
 
     <div id="toasts"></div>
+    <div id="help-pop" role="tooltip" hidden></div>
 
     <script src="./vendor/ethers.umd.min.js"></script>
     <script src="./app.js"></script>
