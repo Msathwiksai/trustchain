@@ -70,7 +70,11 @@
           </div>
           <div class="row">
             <label>Metadata URI<input id="mint-uri" value="ipfs://asset/new" /></label>
-            <label>Source document<input id="mint-source" value="deed-2026-0042.pdf" /></label>
+            <label>Source document
+              <input id="mint-source" value="deed-2026-0042.pdf" />
+              <label class="filebtn inline">Hash a real file<input type="file" id="mint-file" hidden /></label>
+              <span class="filehash" id="mint-file-hash"></span>
+            </label>
           </div>
           <div class="row bottom">
             <label class="check"><input type="checkbox" id="mint-soulbound" /> Soulbound (never transferable)</label>

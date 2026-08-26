@@ -243,3 +243,19 @@ ol.onboard label.named span { font-size: 11px; text-transform: uppercase; letter
 
   th, td { padding: 7px 10px; }
 }
+
+/* ------------------------------------------------------------ file hashing */
+
+label.filebtn {
+  display: inline-block; cursor: pointer; white-space: nowrap;
+  background: transparent; color: var(--text);
+  border: 1px solid var(--line); border-radius: 7px;
+  padding: 5px 9px; font-size: 12px; font-weight: 500;
+  text-transform: none; letter-spacing: 0;
+}
+label.filebtn:hover { border-color: var(--accent); color: var(--accent); }
+label.filebtn.inline { margin-top: 6px; align-self: flex-start; }
+.filehash {
+  font-family: var(--mono); font-size: 11px; color: var(--muted);
+  word-break: break-all; text-transform: none; letter-spacing: 0;
+}

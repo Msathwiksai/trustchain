@@ -147,6 +147,7 @@ async function boot() {
   $("#connect").onclick = connect;
   $("#register-self").onclick = registerSelf;
   $("#mint-form").onsubmit = mint;
+  $("#mint-file").onchange = previewMintFile;
   $("#approve-form").onsubmit = approveRequest;
   $("#approve-code").oninput = previewRequest;
 
@@ -336,6 +337,22 @@ function toast(title, detail, kind = "", persist = false) {
   if (kind && !persist) setTimeout(() => el.remove(), 6000);
   return el;
 }
+
+/**
+ * Hash the actual bytes of a file, in the browser, exactly as the contract expects.
+ *
+ * This is the difference between demonstrating the idea and doing the thing: hashing a
+ * typed filename proves nothing, because the name of an altered certificate is unchanged.
+ * Hashing the bytes means a single edited character anywhere in the document produces a
+ * different hash and verification fails.
+ */
+async function hashFile(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  return ethers.keccak256(bytes);
+}
+
+const prettyBytes = (n) =>
+  n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`;
 
 // ----------------------------------------------- identity without any funds
 
@@ -822,8 +839,11 @@ function renderAssets() {
         <button class="small move" data-perm="TRANSFER_ASSET" data-owner="${a.owner}">Transfer</button>
         <button class="small ghost freeze" data-perm="FREEZE_ASSET">${a.frozen ? "Unfreeze" : "Freeze"}</button>
         <button class="small danger burn" data-perm="BURN_ASSET">Burn</button>
-        <input class="verify" placeholder="source document" />
-        <button class="small ghost check">Verify</button>
+        <label class="filebtn" title="Check a file against the hash recorded at issuance">
+          Verify a file<input type="file" class="verify-file" hidden />
+        </label>
+        <input class="verify" placeholder="or a typed reference" />
+        <button class="small ghost check">Check</button>
       </div>`;
 
     el.querySelector(".move").onclick = () => {
@@ -838,8 +858,23 @@ function renderAssets() {
       send(a.frozen ? "Unfreeze" : "Freeze", async () => (await writer("AssetNFT")).setFrozen(a.id, !a.frozen));
     el.querySelector(".burn").onclick = () =>
       send("Burn", async () => (await writer("AssetNFT")).burn(a.id));
+    const verifyFile = el.querySelector(".verify-file");
+    verifyFile.onchange = async () => {
+      const file = verifyFile.files[0];
+      if (!file) return;
+      const hash = await hashFile(file);
+      const match = await state.read.AssetNFT.verifyAuthenticity(a.id, hash);
+      toast(
+        match ? `Authentic — asset #${a.id}` : `ALTERED — does not match asset #${a.id}`,
+        `${file.name} · ${prettyBytes(file.size)} · ${hash.slice(0, 22)}…`,
+        match ? "ok" : "err"
+      );
+      verifyFile.value = "";
+    };
+
     el.querySelector(".check").onclick = async () => {
       const src = el.querySelector(".verify").value;
+      if (!src) return toast(`Asset #${a.id}`, "choose a file above, or type a reference", "err");
       const match = await state.read.AssetNFT.verifyAuthenticity(a.id, ethers.id(src));
       toast(`Asset #${a.id}`, match ? `"${src}" matches the issued hash` : `"${src}" does not match`, match ? "ok" : "err");
     };
@@ -876,16 +911,39 @@ function registerSelf() {
   );
 }
 
-function mint(ev) {
+async function mint(ev) {
   ev.preventDefault();
   const didHash = $("#mint-to").value;
   const uri = $("#mint-uri").value.trim();
-  const source = $("#mint-source").value.trim();
   const category = $("#mint-category").value.trim();
   const soulbound = $("#mint-soulbound").checked;
+
+  // A chosen file wins over the typed label: only a hash of real bytes can later prove
+  // that a document was not altered.
+  const file = $("#mint-file").files[0];
+  let assetHash;
+  if (file) {
+    assetHash = await hashFile(file);
+  } else {
+    const typed = $("#mint-source").value.trim();
+    if (!typed) return toast("Mint asset", "choose a file, or type a source reference", "err");
+    assetHash = ethers.id(typed);
+  }
+
   return send("Mint asset", async () =>
-    (await writer("AssetNFT")).mintToDid(didHash, uri, ethers.id(source), category, soulbound)
+    (await writer("AssetNFT")).mintToDid(didHash, uri, assetHash, category, soulbound)
   );
+}
+
+/** Show the issuer what will be committed before they commit it. */
+async function previewMintFile() {
+  const file = $("#mint-file").files[0];
+  const out = $("#mint-file-hash");
+  if (!file) {
+    out.textContent = "";
+    return;
+  }
+  out.textContent = `${file.name} · ${prettyBytes(file.size)} · ${(await hashFile(file)).slice(0, 22)}…`;
 }
 
 boot();
