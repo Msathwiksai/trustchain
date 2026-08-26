@@ -3,12 +3,11 @@
   "chainId": 31337,
   "rpcUrl": "http://127.0.0.1:8545",
   "explorer": null,
-  "deployedAtBlock": 49,
   "rootAdmin": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
-  "auditTrail": "0x998abeb3E57409262aE5b751f60747921B33613E",
-  "didRegistry": "0x70e0bA845a1A0F2DA3359C97E0285013525FFC49",
-  "roleManager": "0x0E801D84Fa97b50751Dbf25036d067dCf18858bF",
-  "assetNFT": "0x36C02dA8a0983159322a80FFE9F24b1acfF8B570",
+  "auditTrail": "0x04C89607413713Ec9775E14b954286519d836FEf",
+  "didRegistry": "0x4C4a2f8c81640e47606d3fd77B353E87Ba015584",
+  "roleManager": "0xD8a5a9b31c3C0232E196d518E89Fd8bF83AcAd43",
+  "assetNFT": "0x8198f5d8F8CfFE8f9C413d98a0A55aEB8ab9FbB7",
   "accounts": [
     {
       "name": "admin",
@@ -16,13 +15,23 @@
       "role": "Admin"
     },
     {
-      "name": "records-office",
-      "address": "0x40cD9bdF068b6Bfb6084804D6E64a5e3895a1cB9",
+      "name": "manager",
+      "address": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
       "role": "Manager"
     },
     {
-      "name": "r-kumar",
-      "address": "0x9bcD5b9Bbf9F1b5620b9d0a86AFF278dC99038b9",
+      "name": "auditor",
+      "address": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+      "role": "Auditor"
+    },
+    {
+      "name": "alice",
+      "address": "0x90F79bf6EB2c4f870365E785982E1f101E93b906",
+      "role": "User"
+    },
+    {
+      "name": "bob",
+      "address": "0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65",
       "role": "User"
     }
   ]

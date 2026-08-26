@@ -97,10 +97,10 @@ async function boot() {
 
   const wanted = new URLSearchParams(location.search).get("network");
   let chosen = available.find((d) => d.network === wanted);
-  if (!chosen && injected()) {
+  if (!chosen && available.length > 1 && injected()) {
     // With more than one deployment around, follow whichever chain the wallet is already
     // on. Nobody has to think about networks, and nothing has to be switched.
-    const walletChain = Number(await injected().request({ method: "eth_chainId" }).catch(() => 0));
+    const walletChain = Number(await askWallet("eth_chainId")) || 0;
     chosen = available.find((d) => Number(d.chainId) === walletChain);
   }
   state.cfg = chosen ?? available[0];
@@ -153,6 +153,14 @@ async function boot() {
   $("#approve-form").onsubmit = approveRequest;
   $("#approve-code").oninput = previewRequest;
 
+  initHelp();
+  initGuide();
+  renderWallet();
+
+  // The chain data needs no wallet, so it goes on screen before the wallet is touched.
+  await refresh();
+  setInterval(refresh, 8000);
+
   if (injected()) {
     injected().on?.("accountsChanged", (accts) => {
       state.actor = accts[0] ? ethers.getAddress(accts[0]) : null;
@@ -160,20 +168,40 @@ async function boot() {
       refresh();
     });
     injected().on?.("chainChanged", () => location.reload());
-    // Reconnect silently if this site is already authorised in the wallet.
-    const existing = await injected().request({ method: "eth_accounts" });
-    if (existing?.length) await connect({ silent: true });
-  }
 
-  initHelp();
-  initGuide();
-  renderWallet();
-  await refresh();
-  setInterval(refresh, 8000);
+    // Reconnect silently if this site is already authorised. Time-boxed, and failure
+    // here costs the reader nothing: the page is already usable, just read-only.
+    const existing = await askWallet("eth_accounts");
+    if (existing?.length) {
+      await connect({ silent: true }).catch(() => {});
+    } else if (existing === null) {
+      toast(
+        "Your wallet did not respond",
+        "open MetaMask and clear any pending prompts, then reload. The page below is read-only until then.",
+        "err",
+        true
+      );
+    }
+  }
 }
 
 function injected() {
   return typeof window !== "undefined" ? window.ethereum : undefined;
+}
+
+/**
+ * Every wallet call made while the page is starting is time-boxed. A wallet sitting
+ * behind a stack of unanswered confirmations never replies, and an un-timed await on it
+ * leaves the page blank forever - which is a far worse failure than not knowing the
+ * answer, because the reader cannot even see the data that needs no wallet at all.
+ */
+function askWallet(method, params, ms = 2500) {
+  const eth = injected();
+  if (!eth) return Promise.resolve(null);
+  return Promise.race([
+    eth.request({ method, params }).catch(() => null),
+    new Promise((resolve) => setTimeout(() => resolve(null), ms)),
+  ]);
 }
 
 function fatal(msg) {
@@ -1238,4 +1266,13 @@ async function previewMintFile() {
   out.textContent = `${file.name} · ${prettyBytes(file.size)} · ${(await hashFile(file)).slice(0, 22)}…`;
 }
 
-boot();
+boot().catch((e) => {
+  // A blank page tells the reader nothing. Any unexpected failure during startup is
+  // reported in place instead.
+  const msg = e?.shortMessage ?? e?.message ?? String(e);
+  try {
+    fatal(`The page failed to start: ${msg}`);
+  } catch {
+    document.body.textContent = `TrustChain failed to start: ${msg}`;
+  }
+});
