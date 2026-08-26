@@ -502,6 +502,33 @@ function initHelp() {
   });
 }
 
+/**
+ * A dialog for the actions that cannot be undone. Cancel holds focus, so a stray Enter
+ * or a double-click on the button underneath does nothing.
+ */
+function confirmAction({ title, body, consequence, confirmLabel }) {
+  const dlg = $("#confirm");
+  $("#confirm-title").textContent = title;
+  $("#confirm-body").textContent = body;
+  $("#confirm-consequence").textContent = consequence;
+  $("#confirm-go").textContent = confirmLabel;
+
+  return new Promise((resolve) => {
+    const done = (ok) => {
+      dlg.close();
+      $("#confirm-go").onclick = null;
+      $("#confirm-cancel").onclick = null;
+      dlg.onclose = null;
+      resolve(ok);
+    };
+    $("#confirm-go").onclick = () => done(true);
+    $("#confirm-cancel").onclick = () => done(false);
+    dlg.onclose = () => resolve(false); // Escape, or the backdrop
+    dlg.showModal();
+    $("#confirm-cancel").focus();
+  });
+}
+
 // ------------------------------------------------------------- guided tour
 
 const GUIDES = [
@@ -1019,12 +1046,33 @@ function renderIdentities() {
       </div>`;
 
     const role = () => el.querySelector(".role-pick").value;
-    el.querySelector(".grant").onclick = () =>
+    el.querySelector(".grant").onclick = async () => {
+      const who = label(i.controller) === short(i.controller) ? i.docURI.split("/").pop() : label(i.controller);
+      // The dropdown starts on ADMIN, so this is the easiest mistake on the whole page.
+      if (role() === ROLE_ID.ADMIN) {
+        const ok = await confirmAction({
+          title: `Make ${who} an administrator?`,
+          body: "Admin carries every permission on the platform: issuing and destroying assets, revoking identities, and granting roles to anyone including further administrators.",
+          consequence: "Only another administrator can take this back, and the last administrator can never be removed at all.",
+          confirmLabel: "Grant Admin",
+        });
+        if (!ok) return;
+      }
       send("Grant role", async () => (await writer("RoleManager")).grantRole(i.didHash, role(), 0));
+    };
     el.querySelector(".revoke-role").onclick = () =>
       send("Revoke role", async () => (await writer("RoleManager")).revokeRole(i.didHash, role()));
-    el.querySelector(".revoke-id").onclick = () =>
-      send("Revoke identity", async () => (await writer("DIDRegistry")).revoke(i.didHash));
+    el.querySelector(".revoke-id").onclick = async () => {
+      const who = label(i.controller) === short(i.controller) ? i.docURI.split("/").pop() : label(i.controller);
+      const roles = i.roles.map((r) => ROLE_NAME[r] ?? shortDid(r)).join(", ") || "no roles";
+      const ok = await confirmAction({
+        title: `Revoke ${who}'s identity?`,
+        body: `They currently hold: ${roles}. Revoking the identity removes every one of them at once, and any assets they hold stop being transferable.`,
+        consequence: "This cannot be undone. The same wallet can never register again. To remove a single permission, use Revoke role instead.",
+        confirmLabel: "Revoke identity",
+      });
+      if (ok) send("Revoke identity", async () => (await writer("DIDRegistry")).revoke(i.didHash));
+    };
     box.append(el);
   }
 }
@@ -1088,8 +1136,15 @@ function renderAssets() {
         const nft = await writer("AssetNFT");
         return a.revoked ? nft.reinstateAsset(a.id) : nft.revokeAsset(a.id, "rescinded by issuer");
       });
-    el.querySelector(".burn").onclick = () =>
-      send("Burn", async () => (await writer("AssetNFT")).burn(a.id));
+    el.querySelector(".burn").onclick = async () => {
+      const ok = await confirmAction({
+        title: `Burn asset #${a.id}?`,
+        body: `This destroys the ${a.category} entirely. Verification will report it as unknown rather than revoked, so nobody can later prove it ever existed.`,
+        consequence: "This cannot be undone. For a credential that should stop being valid while keeping its record, use Revoke instead.",
+        confirmLabel: "Burn permanently",
+      });
+      if (ok) send("Burn", async () => (await writer("AssetNFT")).burn(a.id));
+    };
     const verifyFile = el.querySelector(".verify-file");
     verifyFile.onchange = async () => {
       const file = verifyFile.files[0];

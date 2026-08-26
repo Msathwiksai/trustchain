@@ -115,6 +115,16 @@
     <div id="toasts"></div>
     <div id="help-pop" role="tooltip" hidden></div>
 
+    <dialog id="confirm">
+      <h3 id="confirm-title"></h3>
+      <p id="confirm-body"></p>
+      <p class="consequence" id="confirm-consequence"></p>
+      <div class="confirm-actions">
+        <button class="ghost" id="confirm-cancel" autofocus>Cancel</button>
+        <button class="danger" id="confirm-go"></button>
+      </div>
+    </dialog>
+
     <script src="./vendor/ethers.umd.min.js"></script>
     <script src="./app.js"></script>
   </body>

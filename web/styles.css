@@ -331,3 +331,22 @@ button.help:hover, button.help:focus-visible { color: var(--accent); border-colo
 .helpslot { display: inline-flex; align-items: center; margin-left: 6px; }
 .form label { flex-direction: column; }
 .form label .helpslot { position: absolute; }
+
+/* ------------------------------------------------------- destructive confirm */
+
+dialog#confirm {
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--panel); color: var(--text);
+  padding: 22px 24px; max-width: 440px; width: calc(100% - 32px);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .5);
+}
+dialog#confirm::backdrop { background: rgba(3, 6, 12, .62); }
+dialog#confirm h3 { margin: 0 0 10px; font-size: 16px; }
+dialog#confirm p { margin: 0 0 10px; font-size: 14px; color: var(--muted); line-height: 1.55; }
+dialog#confirm .consequence {
+  color: #ff9db0; background: #38202a; border-left: 3px solid #6d2f3f;
+  border-radius: 0 6px 6px 0; padding: 9px 12px; font-size: 13px; margin-bottom: 18px;
+}
+.confirm-actions { display: flex; gap: 10px; justify-content: flex-end; }
+dialog#confirm button.danger { background: #7f2a2a; border: 0; color: #ffe6e6; font-weight: 600; }
+dialog#confirm button.danger:hover { background: #9c3333; }
