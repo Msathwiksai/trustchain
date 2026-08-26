@@ -40,4 +40,8 @@ library Actions {
     bytes32 internal constant ASSET_FROZEN        = keccak256("ASSET_FROZEN");
     bytes32 internal constant ASSET_UNFROZEN      = keccak256("ASSET_UNFROZEN");
     bytes32 internal constant ASSET_BURNED        = keccak256("ASSET_BURNED");
+    bytes32 internal constant GUARDIANS_SET       = keccak256("GUARDIANS_SET");
+    bytes32 internal constant RECOVERY_STARTED    = keccak256("RECOVERY_STARTED");
+    bytes32 internal constant RECOVERY_APPROVED   = keccak256("RECOVERY_APPROVED");
+    bytes32 internal constant RECOVERY_CANCELLED  = keccak256("RECOVERY_CANCELLED");
 }

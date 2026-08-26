@@ -20,6 +20,10 @@ const ACTION_NAMES = [
   "ROLE_GRANTED",
   "ROLE_REVOKED",
   "ROLE_PERMS_UPDATED",
+  "GUARDIANS_SET",
+  "RECOVERY_STARTED",
+  "RECOVERY_APPROVED",
+  "RECOVERY_CANCELLED",
   "ASSET_MINTED",
   "ASSET_TRANSFERRED",
   "ASSET_FROZEN",
@@ -164,7 +168,28 @@ async function main() {
   await (await assetNFT.connect(outsider).claimByIdentity(2)).wait();
   ok("the new key claimed the soulbound clearance - same identity, new key");
 
-  step(6, "Revoke an identity and watch the permissions die with it");
+  step(6, "Social recovery: bob loses his key entirely");
+  const bobDid = await did(bob);
+  await (await didRegistry.connect(bob).setGuardians([await did(manager), await did(auditor)], 2, 0)).wait();
+  ok("bob nominated 2 guardians, either 2 of whom can move his identity");
+  const fresh = ethers.Wallet.createRandom().address;
+  await expectRevert(
+    "a stranger tries to start a recovery",
+    didRegistry.connect(outsider).initiateRecovery(bobDid, fresh)
+  );
+  await (await didRegistry.connect(manager).initiateRecovery(bobDid, fresh)).wait();
+  ok("guardian 1 proposed a new key for bob");
+  await expectRevert(
+    "one guardian tries to finish it alone",
+    didRegistry.connect(manager).executeRecovery(bobDid)
+  );
+  await (await didRegistry.connect(auditor).approveRecovery(bobDid)).wait();
+  ok("guardian 2 approved - the threshold is met");
+  await (await didRegistry.connect(outsider).executeRecovery(bobDid)).wait();
+  ok(`bob controls his identity again from a brand new key: ${fresh}`);
+  console.log(`   his DID is unchanged, and his role survived: ${await roleManager.hasRole(fresh, ROLES.USER)}`);
+
+  step(7, "Revoke an identity and watch the permissions die with it");
   await (await didRegistry.connect(admin).revoke(await did(manager))).wait();
   ok("admin revoked the manager's identity");
   console.log(`   manager permission mask is now: ${await roleManager.permissionsOf(manager.address)}`);
@@ -173,7 +198,7 @@ async function main() {
     assetNFT.connect(manager).mintToDid(await did(bob), "ipfs://x", deedHash, "doc", false)
   );
 
-  step(7, "The audit trail");
+  step(8, "The audit trail");
   const entries = await auditTrail.getEntries(0, 200);
   const who = new Map(
     [

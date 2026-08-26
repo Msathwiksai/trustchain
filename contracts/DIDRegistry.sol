@@ -46,6 +46,36 @@ contract DIDRegistry is IDIDRegistry, EIP712 {
     /// @notice didHash => the key that has been offered control but has not taken it yet.
     mapping(bytes32 => address) public pendingController;
 
+    /**
+     * Social recovery. Two-step rotation saves you from a typo; it does not save you from a
+     * key you no longer have. Guardians do: identities you nominate, any `threshold` of whom
+     * can jointly move your DID to a new key.
+     *
+     * The delay is the safety valve in the other direction. Guardians reaching the threshold
+     * does not move anything - it starts a clock, and until it runs out the real controller
+     * can cancel with one transaction. So a quorum of guardians cannot quietly take an
+     * identity away from someone who still holds their key.
+     */
+    struct GuardianSet {
+        bytes32[] guardians;
+        uint8 threshold;
+        uint64 delay; // seconds between reaching the threshold and being able to execute
+    }
+
+    struct Recovery {
+        address proposed;
+        uint64 startedAt;
+        uint8 approvals;
+        uint256 round; // bumped on cancel/execute so old approvals cannot be replayed
+    }
+
+    mapping(bytes32 => GuardianSet) private _guardianSets;
+    mapping(bytes32 => mapping(bytes32 => bool)) public isGuardian; // did => guardianDid
+    mapping(bytes32 => Recovery) private _recoveries;
+    mapping(bytes32 => mapping(uint256 => mapping(bytes32 => bool))) private _approved;
+
+    uint256 public constant MAX_GUARDIANS = 10;
+
     bytes32[] private _allDids;
 
     event IdentityRegistered(bytes32 indexed didHash, address indexed controller, string did, string docURI);
@@ -55,6 +85,11 @@ contract DIDRegistry is IDIDRegistry, EIP712 {
     event ControllerRotated(bytes32 indexed didHash, address indexed from, address indexed to);
     event IdentityRevoked(bytes32 indexed didHash, address indexed by);
     event RoleManagerUpdated(address indexed roleManager);
+    event GuardiansSet(bytes32 indexed didHash, uint8 threshold, uint64 delay, uint256 count);
+    event RecoveryStarted(bytes32 indexed didHash, address indexed proposed, bytes32 indexed by, uint64 executableAt);
+    event RecoveryApproved(bytes32 indexed didHash, bytes32 indexed by, uint8 approvals, uint8 threshold);
+    event RecoveryCancelled(bytes32 indexed didHash, address indexed by);
+    event RecoveryExecuted(bytes32 indexed didHash, address indexed from, address indexed to);
 
     error NotGovernor();
     error AlreadyRegistered();
@@ -68,6 +103,13 @@ contract DIDRegistry is IDIDRegistry, EIP712 {
     error RoleManagerUnset();
     error LastAdmin();
     error NoProposal();
+    error NotGuardian();
+    error BadGuardianSet();
+    error NoRecovery();
+    error RecoveryPending();
+    error AlreadyApproved();
+    error ThresholdNotMet();
+    error DelayNotElapsed();
 
     constructor(address governor_, address auditTrail_) EIP712("TrustChainDIDRegistry", "1") {
         if (governor_ == address(0) || auditTrail_ == address(0)) revert ZeroAddress();
@@ -210,6 +252,161 @@ contract DIDRegistry is IDIDRegistry, EIP712 {
         auditTrail.record(
             msg.sender, Actions.IDENTITY_ROTATED, didHash, keccak256(abi.encode(from, msg.sender))
         );
+    }
+
+    // ------------------------------------------------------------ social recovery
+
+    /**
+     * @notice Nominate the identities that can recover this one, and how many must agree.
+     * @param guardians  guardian DIDs; each must be a registered, active identity
+     * @param threshold  how many of them must approve
+     * @param delay      seconds the controller has to veto after the threshold is reached.
+     *                   Zero lets guardians act the instant they agree - fine for a
+     *                   demonstration, reckless for anything real. Days, not seconds.
+     */
+    function setGuardians(bytes32[] calldata guardians, uint8 threshold, uint64 delay) external {
+        bytes32 didHash = _activeDidOfSender();
+        if (guardians.length > MAX_GUARDIANS) revert BadGuardianSet();
+        if (threshold == 0 || threshold > guardians.length) revert BadGuardianSet();
+
+        GuardianSet storage set = _guardianSets[didHash];
+        for (uint256 i = 0; i < set.guardians.length; ++i) {
+            isGuardian[didHash][set.guardians[i]] = false;
+        }
+        delete set.guardians;
+
+        for (uint256 i = 0; i < guardians.length; ++i) {
+            bytes32 g = guardians[i];
+            // A guardian must be a real, live identity, must not be this identity, and must
+            // not be listed twice - otherwise one person could meet the threshold alone.
+            if (g == didHash || !isDidActive(g) || isGuardian[didHash][g]) revert BadGuardianSet();
+            isGuardian[didHash][g] = true;
+            set.guardians.push(g);
+        }
+        set.threshold = threshold;
+        set.delay = delay;
+
+        // Changing the guardian set invalidates anything they had already started.
+        Recovery storage r = _recoveries[didHash];
+        r.round += 1;
+        r.proposed = address(0);
+        r.approvals = 0;
+
+        emit GuardiansSet(didHash, threshold, delay, guardians.length);
+        auditTrail.record(
+            msg.sender, Actions.GUARDIANS_SET, didHash, keccak256(abi.encode(guardians, threshold, delay))
+        );
+    }
+
+    /// @notice Begin recovering an identity onto a new key. Callable by any of its guardians.
+    function initiateRecovery(bytes32 didHash, address newController) external {
+        bytes32 guardianDid = _guardianOfSender(didHash);
+        if (newController == address(0) || didOf[newController] != bytes32(0)) revert AlreadyRegistered();
+
+        Recovery storage r = _recoveries[didHash];
+        if (r.proposed != address(0)) revert RecoveryPending();
+
+        r.proposed = newController;
+        r.startedAt = uint64(block.timestamp);
+        r.approvals = 1;
+        _approved[didHash][r.round][guardianDid] = true;
+
+        uint64 executableAt = uint64(block.timestamp) + _guardianSets[didHash].delay;
+        emit RecoveryStarted(didHash, newController, guardianDid, executableAt);
+        auditTrail.record(
+            msg.sender, Actions.RECOVERY_STARTED, didHash, keccak256(abi.encode(newController, executableAt))
+        );
+    }
+
+    /// @notice Add your approval to the recovery already under way.
+    function approveRecovery(bytes32 didHash) external {
+        bytes32 guardianDid = _guardianOfSender(didHash);
+        Recovery storage r = _recoveries[didHash];
+        if (r.proposed == address(0)) revert NoRecovery();
+        if (_approved[didHash][r.round][guardianDid]) revert AlreadyApproved();
+
+        _approved[didHash][r.round][guardianDid] = true;
+        r.approvals += 1;
+
+        emit RecoveryApproved(didHash, guardianDid, r.approvals, _guardianSets[didHash].threshold);
+        auditTrail.record(msg.sender, Actions.RECOVERY_APPROVED, didHash, bytes32(uint256(r.approvals)));
+    }
+
+    /// @notice Veto a recovery. Only the current controller - this is what the delay is for.
+    function cancelRecovery() external {
+        bytes32 didHash = _activeDidOfSender();
+        Recovery storage r = _recoveries[didHash];
+        if (r.proposed == address(0)) revert NoRecovery();
+
+        r.round += 1;
+        r.proposed = address(0);
+        r.approvals = 0;
+
+        emit RecoveryCancelled(didHash, msg.sender);
+        auditTrail.record(msg.sender, Actions.RECOVERY_CANCELLED, didHash, bytes32(0));
+    }
+
+    /**
+     * @notice Complete a recovery once enough guardians agree and the veto window has passed.
+     *         Anyone may call it - the authorisation is the approvals, not the caller.
+     */
+    function executeRecovery(bytes32 didHash) external {
+        Identity storage id = _identities[didHash];
+        if (id.createdAt == 0) revert UnknownIdentity();
+        if (id.revoked) revert IdentityIsRevoked();
+
+        Recovery storage r = _recoveries[didHash];
+        GuardianSet storage set = _guardianSets[didHash];
+        if (r.proposed == address(0)) revert NoRecovery();
+        if (r.approvals < set.threshold) revert ThresholdNotMet();
+        if (block.timestamp < r.startedAt + set.delay) revert DelayNotElapsed();
+
+        address to = r.proposed;
+        if (didOf[to] != bytes32(0)) revert AlreadyRegistered();
+
+        address from = id.controller;
+        r.round += 1;
+        r.proposed = address(0);
+        r.approvals = 0;
+
+        didOf[from] = bytes32(0);
+        didOf[to] = didHash;
+        id.controller = to;
+        id.updatedAt = uint64(block.timestamp);
+        pendingController[didHash] = address(0);
+
+        emit RecoveryExecuted(didHash, from, to);
+        emit ControllerRotated(didHash, from, to);
+        auditTrail.record(msg.sender, Actions.IDENTITY_ROTATED, didHash, keccak256(abi.encode(from, to)));
+    }
+
+    function guardiansOf(bytes32 didHash)
+        external
+        view
+        returns (bytes32[] memory guardians, uint8 threshold, uint64 delay)
+    {
+        GuardianSet storage set = _guardianSets[didHash];
+        return (set.guardians, set.threshold, set.delay);
+    }
+
+    function recoveryOf(bytes32 didHash)
+        external
+        view
+        returns (address proposed, uint64 startedAt, uint8 approvals, uint8 threshold, uint64 executableAt)
+    {
+        Recovery storage r = _recoveries[didHash];
+        GuardianSet storage set = _guardianSets[didHash];
+        return (r.proposed, r.startedAt, r.approvals, set.threshold, r.startedAt + set.delay);
+    }
+
+    function _guardianOfSender(bytes32 didHash) private view returns (bytes32 guardianDid) {
+        Identity storage id = _identities[didHash];
+        if (id.createdAt == 0) revert UnknownIdentity();
+        if (id.revoked) revert IdentityIsRevoked();
+
+        guardianDid = didOf[msg.sender];
+        if (guardianDid == bytes32(0) || !isDidActive(guardianDid)) revert NotGuardian();
+        if (!isGuardian[didHash][guardianDid]) revert NotGuardian();
     }
 
     /// @notice Revoke an identity - the controller itself, or an operator holding
