@@ -8,5 +8,22 @@
   "auditTrail": "0x963B421CB8d4799A8A6ce76395b2FB615e14Be95",
   "didRegistry": "0x3c8D7e0EEDE96182EB5cb0b245C719E1a827D78e",
   "roleManager": "0x3145495e44B980504C3309A73BfA03faF525d84E",
-  "assetNFT": "0x378C8F7ba93bD9707c1C01EB40cCD9b6D341509e"
+  "assetNFT": "0x378C8F7ba93bD9707c1C01EB40cCD9b6D341509e",
+  "accounts": [
+    {
+      "name": "admin",
+      "address": "0x7b4d8d81a65e748B711543b21eD392199D93A989",
+      "role": "Admin"
+    },
+    {
+      "name": "records-office",
+      "address": "0x82f3e6113347af08497ef0c782CEB8364B6493B4",
+      "role": "Manager"
+    },
+    {
+      "name": "r-kumar",
+      "address": "0x24DF19472643906DADB2dE9680376E3D67231248",
+      "role": "User"
+    }
+  ]
 }
