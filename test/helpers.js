@@ -17,6 +17,7 @@ const PERM = {
   FREEZE_ASSET: 1n << 5n,
   BURN_ASSET: 1n << 6n,
   READ_AUDIT: 1n << 7n,
+  REVOKE_ASSET: 1n << 8n,
 };
 
 const ACTION = {
@@ -30,6 +31,7 @@ const ACTION = {
   ASSET_TRANSFERRED: ethers.id("ASSET_TRANSFERRED"),
   ASSET_FROZEN: ethers.id("ASSET_FROZEN"),
   ASSET_BURNED: ethers.id("ASSET_BURNED"),
+  ASSET_REVOKED: ethers.id("ASSET_REVOKED"),
 };
 
 /** Deploy the platform and onboard admin / manager / auditor / alice / bob. */

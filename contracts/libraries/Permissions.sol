@@ -14,8 +14,9 @@ library Perm {
     // is readable by everyone. This bit gates an off-chain indexer, dashboard or export -
     // it is an application-level capability, not a confidentiality guarantee.
     uint256 internal constant READ_AUDIT        = 1 << 7;
+    uint256 internal constant REVOKE_ASSET      = 1 << 8; // rescind a credential, keeping its record
 
-    uint256 internal constant ALL = (1 << 8) - 1;
+    uint256 internal constant ALL = (1 << 9) - 1;
 }
 
 /// @notice Canonical role identifiers. Extra roles can be created at runtime.
@@ -40,6 +41,8 @@ library Actions {
     bytes32 internal constant ASSET_FROZEN        = keccak256("ASSET_FROZEN");
     bytes32 internal constant ASSET_UNFROZEN      = keccak256("ASSET_UNFROZEN");
     bytes32 internal constant ASSET_BURNED        = keccak256("ASSET_BURNED");
+    bytes32 internal constant ASSET_REVOKED       = keccak256("ASSET_REVOKED");
+    bytes32 internal constant ASSET_REINSTATED    = keccak256("ASSET_REINSTATED");
     bytes32 internal constant GUARDIANS_SET       = keccak256("GUARDIANS_SET");
     bytes32 internal constant RECOVERY_STARTED    = keccak256("RECOVERY_STARTED");
     bytes32 internal constant RECOVERY_APPROVED   = keccak256("RECOVERY_APPROVED");

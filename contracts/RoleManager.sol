@@ -86,7 +86,7 @@ contract RoleManager is IRoleManager {
             Roles.MANAGER,
             "Manager",
             Perm.MANAGE_ROLES | Perm.REGISTER_IDENTITY | Perm.MINT_ASSET | Perm.TRANSFER_ASSET
-                | Perm.FREEZE_ASSET,
+                | Perm.FREEZE_ASSET | Perm.REVOKE_ASSET,
             Roles.ADMIN
         );
         _createRole(Roles.AUDITOR, "Auditor", Perm.READ_AUDIT, Roles.ADMIN);

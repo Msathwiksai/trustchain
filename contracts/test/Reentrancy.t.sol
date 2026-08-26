@@ -7,12 +7,14 @@ import {IERC1271} from "@openzeppelin/contracts/interfaces/IERC1271.sol";
 interface IAssetNFT {
     // A struct return is one ABI tuple, not a list of values - declaring it flat decodes wrong.
     struct Asset {
+        bytes32 issuerDid;
         bytes32 originDid;
         bytes32 currentDid;
         bytes32 assetHash;
         uint64 mintedAt;
         bool soulbound;
         bool frozen;
+        bool revoked;
         string category;
     }
 

@@ -25,13 +25,22 @@ import {Perm, Actions} from "./libraries/Permissions.sol";
  */
 contract AssetNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ReentrancyGuard {
     struct Asset {
+        bytes32 issuerDid; // identity that issued it - the college, the registrar, the employer
         bytes32 originDid; // identity the asset was first allocated to
         bytes32 currentDid; // identity holding it now
         bytes32 assetHash; // keccak256 of the underlying document / serial / file
         uint64 mintedAt;
         bool soulbound; // credentials and licences: bound to the identity forever
         bool frozen; // temporarily immobilised, e.g. during a dispute
+        bool revoked; // rescinded by its issuer; the record survives, the claim does not
         string category;
+    }
+
+    /// @notice What a verifier needs to know in one word.
+    enum Status {
+        Unknown, // never issued, or destroyed
+        Valid,
+        Revoked
     }
 
     IDIDRegistry public immutable didRegistry;
@@ -54,6 +63,8 @@ contract AssetNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ReentrancyGuard
     );
     event AssetFrozenSet(uint256 indexed tokenId, bool frozen, address by);
     event AssetBurned(uint256 indexed tokenId, bytes32 indexed didHash, address by);
+    event AssetRevoked(uint256 indexed tokenId, bytes32 indexed issuerDid, address by, string reason);
+    event AssetReinstated(uint256 indexed tokenId, address by);
 
     error NotAuthorized();
     error InactiveIdentity();
@@ -62,6 +73,8 @@ contract AssetNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ReentrancyGuard
     error AssetIsSoulbound();
     error UnknownAsset();
     error ZeroAddress();
+    error AssetIsRevoked();
+    error NotRevoked();
 
     constructor(
         string memory name_,
@@ -94,12 +107,16 @@ contract AssetNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ReentrancyGuard
 
         tokenId = _nextTokenId++;
         _assets[tokenId] = Asset({
+            // Whoever authorised the mint is the issuer, and a verifier can check that
+            // against the organisation they actually trust.
+            issuerDid: didRegistry.didOf(msg.sender),
             originDid: didHash,
             currentDid: didHash,
             assetHash: assetHash,
             mintedAt: uint64(block.timestamp),
             soulbound: soulbound,
             frozen: false,
+            revoked: false,
             category: category
         });
 
@@ -170,6 +187,41 @@ contract AssetNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ReentrancyGuard
         );
     }
 
+    /**
+     * @notice Rescind a credential without erasing it. A degree that was withdrawn, a licence
+     *         that lapsed, a pass that was cancelled: the record must survive so the history
+     *         stays honest, but it must stop verifying as valid.
+     */
+    function revokeAsset(uint256 tokenId, string calldata reason) external {
+        Asset storage a = _assets[tokenId];
+        if (a.mintedAt == 0 || _ownerOf(tokenId) == address(0)) revert UnknownAsset();
+        if (a.revoked) revert AssetIsRevoked();
+        // The issuing organisation, or anyone the platform has trusted with REVOKE_ASSET.
+        if (
+            didRegistry.didOf(msg.sender) != a.issuerDid
+                && !roleManager.hasPermission(msg.sender, Perm.REVOKE_ASSET)
+        ) revert NotAuthorized();
+
+        a.revoked = true;
+        emit AssetRevoked(tokenId, a.issuerDid, msg.sender, reason);
+        auditTrail.record(msg.sender, Actions.ASSET_REVOKED, bytes32(tokenId), keccak256(bytes(reason)));
+    }
+
+    /// @notice Undo a revocation made in error. Also permanent in the record.
+    function reinstateAsset(uint256 tokenId) external {
+        Asset storage a = _assets[tokenId];
+        if (a.mintedAt == 0 || _ownerOf(tokenId) == address(0)) revert UnknownAsset();
+        if (!a.revoked) revert NotRevoked();
+        if (
+            didRegistry.didOf(msg.sender) != a.issuerDid
+                && !roleManager.hasPermission(msg.sender, Perm.REVOKE_ASSET)
+        ) revert NotAuthorized();
+
+        a.revoked = false;
+        emit AssetReinstated(tokenId, msg.sender);
+        auditTrail.record(msg.sender, Actions.ASSET_REINSTATED, bytes32(tokenId), bytes32(0));
+    }
+
     function burn(uint256 tokenId) external nonReentrant {
         if (!roleManager.hasPermission(msg.sender, Perm.BURN_ASSET)) revert NotAuthorized();
         bytes32 didHash = _assets[tokenId].currentDid;
@@ -218,6 +270,7 @@ contract AssetNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ReentrancyGuard
             if (toDid != a.currentDid) {
                 if (a.soulbound) revert AssetIsSoulbound();
                 if (a.frozen) revert AssetIsFrozen();
+                if (a.revoked) revert AssetIsRevoked();
             }
 
             bytes32 fromDid = a.currentDid;
@@ -240,10 +293,40 @@ contract AssetNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ReentrancyGuard
         return _assets[tokenId];
     }
 
+    /**
+     * @notice Everything a verifier needs, in one call: was it issued by whom, is it still
+     *         valid, does the file in front of me match, and who holds it now.
+     * @param candidateHash keccak256 of the file being checked
+     */
+    function verify(uint256 tokenId, bytes32 candidateHash)
+        external
+        view
+        returns (Status status, bool hashMatches, bytes32 issuerDid, bytes32 ownerDid)
+    {
+        Asset storage a = _assets[tokenId];
+        if (a.mintedAt == 0 || _ownerOf(tokenId) == address(0)) {
+            return (Status.Unknown, false, bytes32(0), bytes32(0));
+        }
+        return (
+            a.revoked ? Status.Revoked : Status.Valid,
+            a.assetHash == candidateHash,
+            a.issuerDid,
+            a.currentDid
+        );
+    }
+
+    /// @notice True if `didHash` issued this asset - the check a verifier makes against the
+    ///         organisation they actually trust.
+    function wasIssuedBy(uint256 tokenId, bytes32 didHash) external view returns (bool) {
+        return _assets[tokenId].mintedAt != 0 && _assets[tokenId].issuerDid == didHash;
+    }
+
     /// @notice Check an artefact against the hash recorded at issuance. A burned asset has
     ///         no authenticity to verify - the record survives, the claim does not.
     function verifyAuthenticity(uint256 tokenId, bytes32 candidateHash) external view returns (bool) {
         if (_assets[tokenId].mintedAt == 0 || _ownerOf(tokenId) == address(0)) revert UnknownAsset();
+        // A revoked credential must never come back "authentic" from any code path.
+        if (_assets[tokenId].revoked) revert AssetIsRevoked();
         return _assets[tokenId].assetHash == candidateHash;
     }
 
