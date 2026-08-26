@@ -198,11 +198,56 @@ Deployment order matters, because the contracts verify each other: `AuditTrail` 
 
 ---
 
+## Trust model
+
+Two distinctions decide what this system can honestly claim.
+
+### Immutable is not the same as trustworthy
+
+The audit trail is append-only in code: no function edits or deletes an entry, and only
+registered writers may append. But *who* may write was a governance decision, so a governor
+could once have authorised an arbitrary address to append fabricated history. That made the
+guarantee only as strong as one key.
+
+`AuditTrail.lockWriters()` closes it: the writer set can be frozen permanently, and
+deployment freezes it as the final wiring step. After that no governor - present or future -
+can add a writer. The four platform contracts are the only things that can ever append, and
+that is now a property of the code rather than a promise about behaviour.
+
+What still requires trust: the root administrator holds every permission. Handing `ADMIN`
+to a multisig or a timelock and revoking the original grant is supported today and is what a
+production deployment should do.
+
+### A public URI is not private data
+
+Everything here is permanently public: controller addresses, DID strings, document URIs,
+token URIs, categories, every event. Revocation does not erase any of it - it cannot, and
+nothing on a public chain can.
+
+So the chain holds **commitments, not contents**. `assetHash` is a keccak256 of the
+underlying document, which proves a file is the original and reveals nothing about it. DID
+documents are referenced by URI and should be encrypted off-chain whenever they carry
+personal data; the console's convenience of putting a chosen name into the document URI is
+fine for a demonstration and wrong for real personal data.
+
+`READ_AUDIT` follows from this. It is deliberately not enforced on-chain, because a Solidity
+permission bit cannot make public data private. It gates an off-chain indexer, dashboard or
+export - an application capability, not a confidentiality guarantee.
+
+### What the console assumes
+
+Chain data is attacker-controlled: a document URI or asset category is whatever the person
+who paid for that transaction typed. The console escapes every chain-derived value before
+rendering, because a page that signs transactions must never execute a stranger's markup.
+
+---
+
 ## Known limits
 
-- **Governance is a single root admin.** `AuditTrail.governor` appoints writers and the
-  first `ADMIN` is bootstrapped at deploy. For production that address should be a
-  multisig or a timelock; the contracts already accept any address, including a contract.
+- **Governance is a single root admin.** The first `ADMIN` is bootstrapped at deploy. For
+  production that address should be a multisig or a timelock; the contracts already accept
+  any address, including a contract. The audit trail's writer set is no longer part of this
+  risk - deployment locks it permanently.
 - **DID documents are off-chain.** The registry stores a URI and the audit trail stores a
   hash of it. Pinning (IPFS) is out of scope here.
 - **Verifiable Credentials are not implemented.** The soulbound NFT covers the

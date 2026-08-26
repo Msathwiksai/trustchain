@@ -39,6 +39,17 @@ const short = (a) => (a ? a.slice(0, 6) + "…" + a.slice(-4) : "–");
 const shortDid = (d) => (d && d !== ethers.ZeroHash ? d.slice(0, 10) + "…" : "–");
 const sameAddr = (a, b) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
 
+/**
+ * Anything that came off the chain was written by whoever paid for that transaction -
+ * a document URI, an asset category, a token URI. Interpolating it into innerHTML hands
+ * a stranger script execution in every console, next to buttons that sign transactions.
+ * Every chain-derived value goes through here first.
+ */
+function esc(value) {
+  return String(value ?? "").replace(/[&<>"'`]/g, (c) => ESCAPES[c]);
+}
+const ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "`": "&#96;" };
+
 const state = {
   provider: null, // read-only: direct RPC, or the wallet if that is unreachable
   rpcUrl: null,
@@ -131,7 +142,7 @@ async function boot() {
   status.textContent = `${state.cfg.network} · chain ${state.cfg.chainId}`;
   status.className = "pill pill-good";
   if (state.cfg.explorer) {
-    status.innerHTML = `<a href="${state.cfg.explorer}/address/${state.cfg.assetNFT}" target="_blank" rel="noopener">${state.cfg.network} · chain ${state.cfg.chainId}</a>`;
+    status.innerHTML = `<a href="${esc(state.cfg.explorer)}/address/${esc(state.cfg.assetNFT)}" target="_blank" rel="noopener">${esc(state.cfg.network)} · chain ${esc(state.cfg.chainId)}</a>`;
   }
   $("#connect").onclick = connect;
   $("#register-self").onclick = registerSelf;
@@ -530,8 +541,8 @@ function renderMismatch() {
   }
   bar.hidden = false;
   bar.innerHTML = `<span>Your wallet is on a different network, so this page is read-only.
-    It is showing <b>${state.cfg.network}</b>.</span>
-    <button class="small" id="do-switch">Switch wallet to ${state.cfg.network}</button>`;
+    It is showing <b>${esc(state.cfg.network)}</b>.</span>
+    <button class="small" id="do-switch">Switch wallet to ${esc(state.cfg.network)}</button>`;
   $("#do-switch").onclick = async () => {
     await ensureChain();
     renderMismatch();
@@ -638,7 +649,7 @@ function renderOnboarding() {
            <span class="why">waiting for an administrator to approve it</span></div>`
         : state.actor
           ? `<label class="named"><span>Your name, as it should appear in your DID document</span>
-               <input id="request-name" placeholder="e.g. r-kumar" value="${state.requestName ?? ""}" /></label>
+               <input id="request-name" placeholder="e.g. r-kumar" value="${esc(state.requestName ?? "")}" /></label>
              <button class="small" id="onboard-sign">Sign a request &mdash; free, no ETH</button>
              ${
                funded
@@ -727,7 +738,7 @@ function renderIdentities() {
   const active = state.identities.filter((i) => !i.revoked);
   const keep = target.value;
   target.innerHTML = active
-    .map((i) => `<option value="${i.didHash}">${label(i.controller)} - ${shortDid(i.didHash)}</option>`)
+    .map((i) => `<option value="${esc(i.didHash)}">${esc(label(i.controller))} - ${esc(shortDid(i.didHash))}</option>`)
     .join("");
   if (keep && active.some((i) => i.didHash === keep)) target.value = keep;
 
@@ -748,11 +759,13 @@ function renderIdentities() {
     el.className = "item";
     el.innerHTML = `
       <div class="head">
-        <span class="title">${label(i.controller) === short(i.controller) ? i.docURI.split("/").pop() : label(i.controller)}${sameAddr(i.controller, state.actor) ? " (you)" : ""}</span>
+        <span class="title">${esc(
+          label(i.controller) === short(i.controller) ? i.docURI.split("/").pop() : label(i.controller)
+        )}${sameAddr(i.controller, state.actor) ? " (you)" : ""}</span>
         ${i.revoked ? `<span class="pill pill-bad">revoked</span>` : `<span class="pill pill-good">active</span>`}
       </div>
-      <div class="sub mono">${i.didHash}</div>
-      <div class="sub mono">key ${i.controller} &middot; ${i.docURI}</div>
+      <div class="sub mono">${esc(i.didHash)}</div>
+      <div class="sub mono">key ${esc(i.controller)} &middot; ${esc(i.docURI)}</div>
       <div class="chips">
         ${
           i.roles.map((r) => `<span class="chip role">${ROLE_NAME[r] ?? shortDid(r)}</span>`).join("") ||
@@ -790,21 +803,21 @@ function renderAssets() {
     const mine = sameAddr(a.owner, state.actor);
     el.innerHTML = `
       <div class="head">
-        <span class="title">#${a.id} &middot; ${a.category}</span>
+        <span class="title">#${a.id} &middot; ${esc(a.category)}</span>
         <div class="chips">
           ${a.soulbound ? `<span class="chip sb">soulbound</span>` : ""}
           ${a.frozen ? `<span class="chip frozen">frozen</span>` : ""}
           ${mine ? `<span class="chip role">yours</span>` : ""}
         </div>
       </div>
-      <div class="sub mono">${a.uri}</div>
-      <div class="sub mono">held by ${label(a.owner)} &middot; DID ${shortDid(a.currentDid)}${
-        a.currentDid !== a.originDid ? ` &middot; issued to ${shortDid(a.originDid)}` : ""
+      <div class="sub mono">${esc(a.uri)}</div>
+      <div class="sub mono">held by ${esc(label(a.owner))} &middot; DID ${esc(shortDid(a.currentDid))}${
+        a.currentDid !== a.originDid ? ` &middot; issued to ${esc(shortDid(a.originDid))}` : ""
       }</div>
       <div class="actions">
         <select class="to">${state.identities
           .filter((i) => !i.revoked && i.didHash !== a.currentDid)
-          .map((i) => `<option value="${i.controller}">to ${label(i.controller)}</option>`)
+          .map((i) => `<option value="${esc(i.controller)}">to ${esc(label(i.controller))}</option>`)
           .join("")}</select>
         <button class="small move" data-perm="TRANSFER_ASSET" data-owner="${a.owner}">Transfer</button>
         <button class="small ghost freeze" data-perm="FREEZE_ASSET">${a.frozen ? "Unfreeze" : "Freeze"}</button>
@@ -847,8 +860,8 @@ function renderAudit(entries, count) {
         ? "#" + BigInt(e.subject).toString()
         : shortDid(e.subject);
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${i}</td><td class="action">${ACTION_NAME[e.action] ?? shortDid(e.action)}</td>
-      <td>${label(e.actor)}</td><td>${subject}</td><td>${e.blockNumber}</td>
+    tr.innerHTML = `<td>${i}</td><td class="action">${esc(ACTION_NAME[e.action] ?? shortDid(e.action))}</td>
+      <td>${esc(label(e.actor))}</td><td>${esc(subject)}</td><td>${e.blockNumber}</td>
       <td>${new Date(Number(e.timestamp) * 1000).toLocaleTimeString()}</td>`;
     body.append(tr);
   });

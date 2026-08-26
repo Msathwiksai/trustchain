@@ -156,7 +156,9 @@ async function main() {
   ok("manager unfroze token #1");
 
   step(5, "Key rotation: the identity outlives the key");
-  await (await didRegistry.connect(alice).rotateController(outsider.address)).wait();
+  const aliceDid = await did(alice);
+  await (await didRegistry.connect(alice).proposeController(outsider.address)).wait();
+  await (await didRegistry.connect(outsider).acceptController(aliceDid)).wait();
   ok("alice rotated control of her DID to a fresh key");
   console.log(`   token #2 is still owned by DID:      ${await assetNFT.isOwnedByDid(2, await didRegistry.didOf(outsider.address))}`);
   await (await assetNFT.connect(outsider).claimByIdentity(2)).wait();

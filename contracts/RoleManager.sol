@@ -186,7 +186,9 @@ contract RoleManager is IRoleManager {
 
     function _grant(bytes32 didHash, bytes32 role, uint64 expiresAt, address by) private {
         Grant storage g = _grants[didHash][role];
-        if (g.active) revert AlreadyGranted();
+        // An expired grant is already dead everywhere else in this contract, so it must not
+        // block a fresh one; requiring somebody to revoke it first was busywork.
+        if (_isLive(g)) revert AlreadyGranted();
         if (role == Roles.ADMIN) {
             // An expiring ADMIN would let the last administrator lapse silently, locking
             // the platform with no transaction to point at. ADMIN is permanent until revoked.
@@ -196,6 +198,8 @@ contract RoleManager is IRoleManager {
             }
         }
         if (g.grantedAt == 0) {
+            // The cap bounds the loop in permissionsOf, so it counts slots ever used rather
+            // than live roles - re-granting a role reuses its slot and costs nothing.
             if (_rolesOf[didHash].length >= MAX_ROLES_PER_IDENTITY) revert TooManyRoles();
             _rolesOf[didHash].push(role);
         }

@@ -22,6 +22,12 @@ contract AuditTrail {
     address public governor;
     mapping(address => bool) public isWriter;
 
+    /// @notice Once true, the set of writers can never change again - not by this governor,
+    ///         not by any future one. Deployment locks it, so "only the platform contracts
+    ///         can append" stops being a promise about governance and becomes a property
+    ///         of the code.
+    bool public writersLocked;
+
     event AuditRecorded(
         uint256 indexed id,
         address indexed actor,
@@ -31,11 +37,13 @@ contract AuditTrail {
         uint64 timestamp
     );
     event WriterUpdated(address indexed writer, bool allowed);
+    event WritersLocked();
     event GovernorTransferred(address indexed from, address indexed to);
 
     error NotGovernor();
     error NotWriter();
     error ZeroAddress();
+    error WritersAreLocked();
 
     constructor(address governor_) {
         if (governor_ == address(0)) revert ZeroAddress();
@@ -49,9 +57,16 @@ contract AuditTrail {
 
     /// @notice Authorise (or de-authorise) a platform contract to append entries.
     function setWriter(address writer, bool allowed) external onlyGovernor {
+        if (writersLocked) revert WritersAreLocked();
         if (writer == address(0)) revert ZeroAddress();
         isWriter[writer] = allowed;
         emit WriterUpdated(writer, allowed);
+    }
+
+    /// @notice Freeze the writer set permanently. There is no unlock.
+    function lockWriters() external onlyGovernor {
+        writersLocked = true;
+        emit WritersLocked();
     }
 
     function transferGovernor(address newGovernor) external onlyGovernor {

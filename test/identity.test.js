@@ -119,7 +119,8 @@ describe("DIDRegistry", function () {
       const { didRegistry, alice, outsider } = await loadFixture(platformFixture);
       const didBefore = await didRegistry.didOf(alice.address);
 
-      await didRegistry.connect(alice).rotateController(outsider.address);
+      await didRegistry.connect(alice).proposeController(outsider.address);
+      await didRegistry.connect(outsider).acceptController(didBefore);
 
       expect(await didRegistry.didOf(outsider.address)).to.equal(didBefore);
       expect(await didRegistry.didOf(alice.address)).to.equal(ethers.ZeroHash);
@@ -130,7 +131,9 @@ describe("DIDRegistry", function () {
     it("carries the identity's roles across to the new key", async function () {
       const { didRegistry, roleManager, manager, outsider } = await loadFixture(platformFixture);
 
-      await didRegistry.connect(manager).rotateController(outsider.address);
+      const managerDid = await didRegistry.didOf(manager.address);
+      await didRegistry.connect(manager).proposeController(outsider.address);
+      await didRegistry.connect(outsider).acceptController(managerDid);
 
       expect(await roleManager.hasRole(outsider.address, ROLES.MANAGER)).to.equal(true);
       expect(await roleManager.hasRole(manager.address, ROLES.MANAGER)).to.equal(false);
@@ -139,7 +142,7 @@ describe("DIDRegistry", function () {
     it("will not rotate onto a key that already has an identity", async function () {
       const { didRegistry, alice, bob } = await loadFixture(platformFixture);
       await expect(
-        didRegistry.connect(alice).rotateController(bob.address)
+        didRegistry.connect(alice).proposeController(bob.address)
       ).to.be.revertedWithCustomError(didRegistry, "AlreadyRegistered");
     });
   });

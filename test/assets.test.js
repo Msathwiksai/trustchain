@@ -161,7 +161,8 @@ describe("AssetNFT", function () {
       const f = await loadFixture(platformFixture);
       const { tokenId, aliceDid } = await mintToAlice(f, { soulbound: true });
 
-      await f.didRegistry.connect(f.alice).rotateController(f.outsider.address);
+      await f.didRegistry.connect(f.alice).proposeController(f.outsider.address);
+      await f.didRegistry.connect(f.outsider).acceptController(aliceDid);
 
       // the DID still owns it; only the key that holds it is stale
       expect(await f.assetNFT.isOwnedByDid(tokenId, aliceDid)).to.equal(true);

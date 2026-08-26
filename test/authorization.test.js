@@ -156,9 +156,10 @@ describe("Role boundaries", function () {
 
     it("cannot take over an Admin identity by rotating it", async function () {
       const f = await loadFixture(platformFixture);
-      // rotateController is callable only by the identity's own controller
-      await expect(f.didRegistry.connect(f.manager).rotateController(f.outsider.address)).to.not.be
-        .reverted;
+      // rotation is callable only by the identity's own controller, and the new key must accept
+      const managerDid = await f.did(f.manager);
+      await f.didRegistry.connect(f.manager).proposeController(f.outsider.address);
+      await f.didRegistry.connect(f.outsider).acceptController(managerDid);
       expect(await f.roleManager.hasRole(f.admin.address, ROLES.ADMIN)).to.equal(true);
     });
   });

@@ -4,6 +4,8 @@ pragma solidity ^0.8.24;
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {ERC721Enumerable} from "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
 import {ERC721URIStorage} from "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
+import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 import {IDIDRegistry, IRoleManager, IAuditTrail} from "./interfaces/IPlatform.sol";
 import {Perm, Actions} from "./libraries/Permissions.sol";
@@ -21,7 +23,7 @@ import {Perm, Actions} from "./libraries/Permissions.sol";
  *           - frozen tokens do not move; soulbound tokens never move at all;
  *           - a custodial move by a Manager needs TRANSFER_ASSET and is logged as such.
  */
-contract AssetNFT is ERC721, ERC721Enumerable, ERC721URIStorage {
+contract AssetNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ReentrancyGuard {
     struct Asset {
         bytes32 originDid; // identity the asset was first allocated to
         bytes32 currentDid; // identity holding it now
@@ -85,7 +87,7 @@ contract AssetNFT is ERC721, ERC721Enumerable, ERC721URIStorage {
         bytes32 assetHash,
         string calldata category,
         bool soulbound
-    ) public returns (uint256 tokenId) {
+    ) public nonReentrant returns (uint256 tokenId) {
         if (!roleManager.hasPermission(msg.sender, Perm.MINT_ASSET)) revert NotAuthorized();
         address owner = didRegistry.controllerOf(didHash);
         if (owner == address(0)) revert InactiveIdentity();
@@ -101,13 +103,16 @@ contract AssetNFT is ERC721, ERC721Enumerable, ERC721URIStorage {
             category: category
         });
 
-        _safeMint(owner, tokenId);
+        // The URI, the event and the audit entry are all written before `_safeMint`, whose
+        // ERC-721 receiver callback hands control to the recipient. A contract recipient
+        // therefore observes a finished asset, never a half-built one.
         _setTokenURI(tokenId, uri);
-
         emit AssetMinted(tokenId, didHash, owner, assetHash, category, soulbound);
         auditTrail.record(
             msg.sender, Actions.ASSET_MINTED, bytes32(tokenId), keccak256(abi.encode(didHash, assetHash, uri))
         );
+
+        _safeMint(owner, tokenId);
     }
 
     /// @notice Convenience wrapper - resolves the recipient's DID first.
@@ -130,7 +135,7 @@ contract AssetNFT is ERC721, ERC721Enumerable, ERC721URIStorage {
      *         convenience. Requires TRANSFER_ASSET and is written to the audit trail
      *         flagged as custodial.
      */
-    function custodialTransfer(address from, address to, uint256 tokenId) external {
+    function custodialTransfer(address from, address to, uint256 tokenId) external nonReentrant {
         if (!roleManager.hasPermission(msg.sender, Perm.TRANSFER_ASSET)) revert NotAuthorized();
         if (to == address(0)) revert ZeroAddress();
         if (_ownerOf(tokenId) != from) revert NotAuthorized();
@@ -141,12 +146,12 @@ contract AssetNFT is ERC721, ERC721Enumerable, ERC721URIStorage {
 
     /**
      * @notice Pull an asset onto the key that now controls its identity. After
-     *         `DIDRegistry.rotateController` the DID owns the asset but the old key still
+     *         `DIDRegistry.acceptController` the DID owns the asset but the old key still
      *         appears as the ERC-721 holder; this realigns the two without a transfer from
      *         the retired key. The owning identity does not change, so soulbound and
      *         frozen assets can be claimed too.
      */
-    function claimByIdentity(uint256 tokenId) external {
+    function claimByIdentity(uint256 tokenId) external nonReentrant {
         Asset storage a = _assets[tokenId];
         if (a.mintedAt == 0) revert UnknownAsset();
         if (didRegistry.controllerOf(a.currentDid) != msg.sender) revert NotAuthorized();
@@ -165,7 +170,7 @@ contract AssetNFT is ERC721, ERC721Enumerable, ERC721URIStorage {
         );
     }
 
-    function burn(uint256 tokenId) external {
+    function burn(uint256 tokenId) external nonReentrant {
         if (!roleManager.hasPermission(msg.sender, Perm.BURN_ASSET)) revert NotAuthorized();
         bytes32 didHash = _assets[tokenId].currentDid;
         if (_ownerOf(tokenId) == address(0)) revert UnknownAsset();
@@ -177,6 +182,21 @@ contract AssetNFT is ERC721, ERC721Enumerable, ERC721URIStorage {
 
     // ------------------------------------------------------------------ enforcement
 
+    /**
+     * @dev Every transfer path in ERC-721 - including both `safeTransferFrom` overloads -
+     *      funnels through `transferFrom`, so guarding it alone stops a receiver callback
+     *      re-entering mid-transfer. Guarding `safeTransferFrom` as well would trip the
+     *      guard on its own internal call.
+     */
+    function transferFrom(address from, address to, uint256 tokenId)
+        public
+        override(ERC721, IERC721)
+        nonReentrant
+    {
+        super.transferFrom(from, to, tokenId);
+    }
+
+    /// @dev Set only for the duration of a custodial move, which cannot be re-entered.
     bool private _custodial;
 
     function _update(address to, uint256 tokenId, address auth)
@@ -220,9 +240,10 @@ contract AssetNFT is ERC721, ERC721Enumerable, ERC721URIStorage {
         return _assets[tokenId];
     }
 
-    /// @notice Check an off-chain artefact against the hash recorded at issuance.
+    /// @notice Check an artefact against the hash recorded at issuance. A burned asset has
+    ///         no authenticity to verify - the record survives, the claim does not.
     function verifyAuthenticity(uint256 tokenId, bytes32 candidateHash) external view returns (bool) {
-        if (_assets[tokenId].mintedAt == 0) revert UnknownAsset();
+        if (_assets[tokenId].mintedAt == 0 || _ownerOf(tokenId) == address(0)) revert UnknownAsset();
         return _assets[tokenId].assetHash == candidateHash;
     }
 

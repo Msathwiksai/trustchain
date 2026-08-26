@@ -10,7 +10,10 @@ library Perm {
     uint256 internal constant TRANSFER_ASSET    = 1 << 4; // move an asset the caller does not own (custodial)
     uint256 internal constant FREEZE_ASSET      = 1 << 5; // freeze / unfreeze an asset
     uint256 internal constant BURN_ASSET        = 1 << 6; // destroy an asset
-    uint256 internal constant READ_AUDIT        = 1 << 7; // read the on-chain audit trail through gated views
+    // Not enforceable on-chain and deliberately not enforced: everything on a public chain
+    // is readable by everyone. This bit gates an off-chain indexer, dashboard or export -
+    // it is an application-level capability, not a confidentiality guarantee.
+    uint256 internal constant READ_AUDIT        = 1 << 7;
 
     uint256 internal constant ALL = (1 << 8) - 1;
 }

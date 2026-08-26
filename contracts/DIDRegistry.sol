@@ -14,7 +14,7 @@ import {Perm, Actions} from "./libraries/Permissions.sol";
  *         `did:tcid:<chainId>:<address>`.
  *
  *         The DID is anchored to the address that first registered it, so it survives
- *         key rotation: `rotateController` moves control to a fresh key while the DID
+ *         key rotation: propose-and-accept moves control to a fresh key while the DID
  *         string - and therefore every NFT bound to it - stays the same.
  *
  *         Two authentication paths, both cryptographic:
@@ -43,10 +43,15 @@ contract DIDRegistry is IDIDRegistry, EIP712 {
     mapping(address => bytes32) public override didOf;
     mapping(address => uint256) public nonces;
 
+    /// @notice didHash => the key that has been offered control but has not taken it yet.
+    mapping(bytes32 => address) public pendingController;
+
     bytes32[] private _allDids;
 
     event IdentityRegistered(bytes32 indexed didHash, address indexed controller, string did, string docURI);
     event DocumentUpdated(bytes32 indexed didHash, string docURI);
+    event ControllerProposed(bytes32 indexed didHash, address indexed from, address indexed to);
+    event ControllerProposalCancelled(bytes32 indexed didHash, address indexed was);
     event ControllerRotated(bytes32 indexed didHash, address indexed from, address indexed to);
     event IdentityRevoked(bytes32 indexed didHash, address indexed by);
     event RoleManagerUpdated(address indexed roleManager);
@@ -62,6 +67,7 @@ contract DIDRegistry is IDIDRegistry, EIP712 {
     error ZeroAddress();
     error RoleManagerUnset();
     error LastAdmin();
+    error NoProposal();
 
     constructor(address governor_, address auditTrail_) EIP712("TrustChainDIDRegistry", "1") {
         if (governor_ == address(0) || auditTrail_ == address(0)) revert ZeroAddress();
@@ -156,24 +162,53 @@ contract DIDRegistry is IDIDRegistry, EIP712 {
         auditTrail.record(msg.sender, Actions.IDENTITY_UPDATED, didHash, keccak256(bytes(docURI)));
     }
 
-    /// @notice Move control of the DID to a new key. The DID string is unchanged, so assets
-    ///         bound to it keep their provenance.
-    function rotateController(address newController) external {
+    /**
+     * @notice Offer control of your DID to a new key. Nothing moves yet.
+     *
+     *         Rotation is two-step on purpose: a single-step version would hand an identity,
+     *         its roles and its assets to whatever address was typed, including one nobody
+     *         can sign for. Here the new key must claim it, which is only possible if it
+     *         actually exists and its holder controls it.
+     */
+    function proposeController(address newController) external {
         if (newController == address(0)) revert ZeroAddress();
         if (didOf[newController] != bytes32(0)) revert AlreadyRegistered();
 
         bytes32 didHash = _activeDidOfSender();
-        didOf[msg.sender] = bytes32(0);
-        didOf[newController] = didHash;
-        _identities[didHash].controller = newController;
-        _identities[didHash].updatedAt = uint64(block.timestamp);
+        pendingController[didHash] = newController;
+        emit ControllerProposed(didHash, msg.sender, newController);
+    }
 
-        emit ControllerRotated(didHash, msg.sender, newController);
+    /// @notice Withdraw an offer that has not been accepted.
+    function cancelControllerProposal() external {
+        bytes32 didHash = _activeDidOfSender();
+        address was = pendingController[didHash];
+        if (was == address(0)) revert NoProposal();
+        pendingController[didHash] = address(0);
+        emit ControllerProposalCancelled(didHash, was);
+    }
+
+    /**
+     * @notice Take control of a DID that has been offered to you. Proving control of the
+     *         new key is the whole point, so only that key can call this.
+     */
+    function acceptController(bytes32 didHash) external {
+        Identity storage id = _identities[didHash];
+        if (id.createdAt == 0) revert UnknownIdentity();
+        if (id.revoked) revert IdentityIsRevoked();
+        if (pendingController[didHash] != msg.sender) revert NoProposal();
+        if (didOf[msg.sender] != bytes32(0)) revert AlreadyRegistered();
+
+        address from = id.controller;
+        pendingController[didHash] = address(0);
+        didOf[from] = bytes32(0);
+        didOf[msg.sender] = didHash;
+        id.controller = msg.sender;
+        id.updatedAt = uint64(block.timestamp);
+
+        emit ControllerRotated(didHash, from, msg.sender);
         auditTrail.record(
-            msg.sender,
-            Actions.IDENTITY_ROTATED,
-            didHash,
-            keccak256(abi.encode(msg.sender, newController))
+            msg.sender, Actions.IDENTITY_ROTATED, didHash, keccak256(abi.encode(from, msg.sender))
         );
     }
 

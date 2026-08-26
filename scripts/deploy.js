@@ -60,6 +60,11 @@ async function deployPlatform(deployer, opts = {}) {
   await settle(await auditTrail.setWriter(await assetNFT.getAddress(), true));
   log(`AssetNFT      ${await assetNFT.getAddress()}`);
 
+  // Wiring is complete, so freeze the writer set permanently. From here nobody - not even
+  // the governor - can authorise anything else to append to the audit trail.
+  await settle(await auditTrail.lockWriters());
+  log(`writers locked - the audit trail can never accept a new writer`);
+
   return { auditTrail, didRegistry, roleManager, assetNFT };
 }
 
