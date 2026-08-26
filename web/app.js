@@ -64,6 +64,7 @@ const state = {
   balance: 0n,
   request: null, // signed identity request awaiting an administrator
   requestName: "",
+  refreshing: false,
   labels: new Map(), // lowercase address -> friendly name from the seed script
   identities: [],
   assets: [],
@@ -165,7 +166,7 @@ async function boot() {
 
   renderWallet();
   await refresh();
-  setInterval(refresh, 5000);
+  setInterval(refresh, 8000);
 }
 
 function injected() {
@@ -444,7 +445,29 @@ function approveRequest(ev) {
 
 // --------------------------------------------------------------------- reads
 
+/**
+ * A burned token and an unreachable node both make `ownerOf` throw. Treating them the
+ * same made assets blink out of the list whenever the public endpoint hiccupped, so this
+ * only reports "burned" when the chain positively says the token does not exist, and
+ * rethrows everything else for the caller to handle as a failed read.
+ */
+async function ownerOrBurned(nft, id) {
+  try {
+    return await nft.ownerOf(id);
+  } catch (e) {
+    const gone =
+      e?.revert?.name === "ERC721NonexistentToken" ||
+      /ERC721NonexistentToken/.test(e?.info?.error?.message ?? e?.shortMessage ?? e?.message ?? "");
+    if (gone) return null;
+    throw e;
+  }
+}
+
 async function refresh() {
+  // A poll that is still in flight must finish before the next one starts, or two
+  // interleaved reads render out of order and the page appears to flicker.
+  if (state.refreshing) return;
+  state.refreshing = true;
   try {
     await readChain();
     state.readFailed = false;
@@ -455,6 +478,10 @@ async function refresh() {
       state.readFailed = true;
       fatal(`Cannot read the contracts on ${state.cfg.network} - check deployments/${state.cfg.network}.json. (${e.shortMessage ?? e.message})`);
     }
+    // Whatever is already on screen stays there: a failed read shows nothing new, it
+    // does not erase what was last known to be true.
+  } finally {
+    state.refreshing = false;
   }
 }
 
@@ -464,8 +491,10 @@ async function readChain() {
   const dids = await DIDRegistry.allDids(0, 200);
   state.identities = await Promise.all(
     dids.map(async (didHash) => {
-      const id = await DIDRegistry.resolve(didHash);
-      const roles = await RoleManager.rolesOfDid(didHash);
+      const [id, roles] = await Promise.all([
+        DIDRegistry.resolve(didHash),
+        RoleManager.rolesOfDid(didHash),
+      ]);
       return {
         didHash,
         controller: id.controller,
@@ -477,26 +506,24 @@ async function readChain() {
   );
 
   const total = Number(await AssetNFT.totalMinted());
-  state.assets = [];
-  for (let id = 1; id <= total; id++) {
-    const a = await AssetNFT.assetOf(id);
-    let owner = null;
-    try {
-      owner = await AssetNFT.ownerOf(id);
-    } catch {
-      /* burned */
-    }
-    state.assets.push({
-      id,
-      owner,
-      currentDid: a.currentDid,
-      originDid: a.originDid,
-      category: a.category,
-      soulbound: a.soulbound,
-      frozen: a.frozen,
-      uri: owner ? await AssetNFT.tokenURI(id) : "",
-    });
-  }
+  const ids = Array.from({ length: total }, (_, i) => i + 1);
+  state.assets = await Promise.all(
+    ids.map(async (id) => {
+      const [a, owner] = await Promise.all([AssetNFT.assetOf(id), ownerOrBurned(AssetNFT, id)]);
+      return {
+        id,
+        owner,
+        issuerDid: a.issuerDid,
+        currentDid: a.currentDid,
+        originDid: a.originDid,
+        category: a.category,
+        soulbound: a.soulbound,
+        frozen: a.frozen,
+        revoked: a.revoked,
+        uri: owner ? await AssetNFT.tokenURI(id) : "",
+      };
+    })
+  );
 
   if (state.actor && injected()) state.wrongChain = !(await onPlatformChain());
   state.perms = state.actor ? await RoleManager.permissionsOf(state.actor) : 0n;
@@ -822,12 +849,18 @@ function renderAssets() {
       <div class="head">
         <span class="title">#${a.id} &middot; ${esc(a.category)}</span>
         <div class="chips">
+          ${a.revoked ? `<span class="chip frozen">revoked</span>` : ""}
           ${a.soulbound ? `<span class="chip sb">soulbound</span>` : ""}
           ${a.frozen ? `<span class="chip frozen">frozen</span>` : ""}
           ${mine ? `<span class="chip role">yours</span>` : ""}
         </div>
       </div>
       <div class="sub mono">${esc(a.uri)}</div>
+      <div class="sub mono">issued by ${esc(
+        state.identities.find((i) => i.didHash === a.issuerDid)
+          ? label(state.identities.find((i) => i.didHash === a.issuerDid).controller)
+          : shortDid(a.issuerDid)
+      )}</div>
       <div class="sub mono">held by ${esc(label(a.owner))} &middot; DID ${esc(shortDid(a.currentDid))}${
         a.currentDid !== a.originDid ? ` &middot; issued to ${esc(shortDid(a.originDid))}` : ""
       }</div>
@@ -838,6 +871,7 @@ function renderAssets() {
           .join("")}</select>
         <button class="small move" data-perm="TRANSFER_ASSET" data-owner="${a.owner}">Transfer</button>
         <button class="small ghost freeze" data-perm="FREEZE_ASSET">${a.frozen ? "Unfreeze" : "Freeze"}</button>
+        <button class="small danger revoke-asset" data-perm="REVOKE_ASSET">${a.revoked ? "Reinstate" : "Revoke"}</button>
         <button class="small danger burn" data-perm="BURN_ASSET">Burn</button>
         <label class="filebtn" title="Check a file against the hash recorded at issuance">
           Verify a file<input type="file" class="verify-file" hidden />
@@ -856,6 +890,11 @@ function renderAssets() {
     };
     el.querySelector(".freeze").onclick = () =>
       send(a.frozen ? "Unfreeze" : "Freeze", async () => (await writer("AssetNFT")).setFrozen(a.id, !a.frozen));
+    el.querySelector(".revoke-asset").onclick = () =>
+      send(a.revoked ? "Reinstate" : "Revoke", async () => {
+        const nft = await writer("AssetNFT");
+        return a.revoked ? nft.reinstateAsset(a.id) : nft.revokeAsset(a.id, "rescinded by issuer");
+      });
     el.querySelector(".burn").onclick = () =>
       send("Burn", async () => (await writer("AssetNFT")).burn(a.id));
     const verifyFile = el.querySelector(".verify-file");
@@ -863,12 +902,17 @@ function renderAssets() {
       const file = verifyFile.files[0];
       if (!file) return;
       const hash = await hashFile(file);
-      const match = await state.read.AssetNFT.verifyAuthenticity(a.id, hash);
-      toast(
-        match ? `Authentic — asset #${a.id}` : `ALTERED — does not match asset #${a.id}`,
-        `${file.name} · ${prettyBytes(file.size)} · ${hash.slice(0, 22)}…`,
-        match ? "ok" : "err"
-      );
+      const [status, matches, issuerDid] = await state.read.AssetNFT.verify(a.id, hash);
+      const issuer = state.identities.find((i) => i.didHash === issuerDid);
+      const issuedBy = issuer ? label(issuer.controller) : shortDid(issuerDid);
+
+      let title, kind;
+      if (Number(status) === 0) [title, kind] = [`Asset #${a.id} does not exist`, "err"];
+      else if (!matches) [title, kind] = [`ALTERED — this file is not what was issued`, "err"];
+      else if (Number(status) === 2) [title, kind] = [`REVOKED — issued by ${issuedBy}, since rescinded`, "err"];
+      else [title, kind] = [`AUTHENTIC — issued by ${issuedBy}`, "ok"];
+
+      toast(title, `${file.name} · ${prettyBytes(file.size)} · ${hash.slice(0, 22)}…`, kind);
       verifyFile.value = "";
     };
 
