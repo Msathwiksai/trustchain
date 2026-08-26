@@ -8,5 +8,32 @@
   "auditTrail": "0x28563e7aAe987c11C3dFd3cE4Af47d644E24811A",
   "didRegistry": "0x9A028A980504BC3eAAF41d0A274ED47ff6Ab5081",
   "roleManager": "0x280D2060131a61455e1a9cB0e1044296A18E0053",
-  "assetNFT": "0x7ddA2d019B253063f81CFD13368A4c0a1E2280EF"
+  "assetNFT": "0x7ddA2d019B253063f81CFD13368A4c0a1E2280EF",
+  "accounts": [
+    {
+      "name": "admin",
+      "address": "0x7b4d8d81a65e748B711543b21eD392199D93A989",
+      "role": "Admin"
+    },
+    {
+      "name": "records-office",
+      "address": "0x668184D52F32a86Dd9113aaE2416Bf7AD2b056c0",
+      "role": "Manager"
+    },
+    {
+      "name": "compliance",
+      "address": "0xa18da270A4f313EBC0F62aC2b663dee3C7928EBD",
+      "role": "Auditor"
+    },
+    {
+      "name": "r-kumar",
+      "address": "0xf0ec2F0cBc4AbCe59b5658015bCcA6d1D480e00e",
+      "role": "User"
+    },
+    {
+      "name": "s-nair",
+      "address": "0x151bC00D20dc93e94Cc41eEe69Afc41F29042cB7",
+      "role": "User"
+    }
+  ]
 }
