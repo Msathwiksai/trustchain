@@ -86,6 +86,12 @@ const state = {
   labels: new Map(), // lowercase address -> friendly name from the seed script
   identities: [],
   assets: [],
+  chain: {
+    head: 0, // latest block on the network, whether or not it concerns us
+    blocks: new Map(), // block number -> action names recorded in it
+    headers: new Map(), // block number -> { hash, parentHash, time }, cached forever
+    failed: false,
+  },
 };
 
 // ------------------------------------------------------------------- plumbing
@@ -181,7 +187,13 @@ async function boot() {
   if (injected()) {
     injected().on?.("accountsChanged", (accts) => {
       state.actor = accts[0] ? ethers.getAddress(accts[0]) : null;
-      if (!state.actor) state.wallet = null;
+      // The signer has to be rebuilt alongside the account. Unlocking MetaMask arrives
+      // here as an account with no provider behind it, and the page would then hold an
+      // address it cannot sign for - failing much later, at the worst moment, with a
+      // message about nothing in particular.
+      state.wallet = state.actor ? new ethers.BrowserProvider(injected()) : null;
+      state.walletLocked = false;
+      state.request = null; // a request signed by the previous key is not this one's
       refresh();
     });
     injected().on?.("chainChanged", () => location.reload());
@@ -340,6 +352,13 @@ async function switchAccount() {
 async function writer(name) {
   if (!state.wallet) throw new Error("connect a wallet first");
   if (state.wrongChain) await ensureChain();
+  // ensureChain leaves the flag standing if the switch was refused or failed, and going
+  // ahead from here would submit the transaction to whichever chain the wallet is really
+  // on. On a wallet left on mainnet that is real money spent on a contract that is not
+  // there, so this stops instead.
+  if (state.wrongChain) {
+    throw new Error(`MetaMask is not on ${state.cfg.network} - nothing was sent`);
+  }
   const signer = await state.wallet.getSigner(state.actor);
   return state.read[name].connect(signer);
 }
@@ -479,7 +498,11 @@ async function signIdentityRequest() {
       { subject: state.actor, docURI, nonce, deadline }
     );
 
-    state.request = btoa(JSON.stringify({ subject: state.actor, docURI, deadline, signature }));
+    // The chain is inside the signature already; carrying it in the code as well lets the
+    // administrator be told which network it belongs to, instead of watching it revert.
+    state.request = btoa(
+      JSON.stringify({ chainId: Number(state.cfg.chainId), subject: state.actor, docURI, deadline, signature })
+    );
     toast("Signed", "no gas was spent - give the code to an administrator", "ok");
     renderOnboarding();
   } catch (e) {
@@ -494,6 +517,9 @@ function decodeRequest(code) {
   return r;
 }
 
+/** Older codes carry no chain, and an unknown chain is not evidence of a wrong one. */
+const wrongChainRequest = (r) => r.chainId != null && Number(r.chainId) !== Number(state.cfg.chainId);
+
 function approveRequest(ev) {
   ev.preventDefault();
   let r;
@@ -503,6 +529,9 @@ function approveRequest(ev) {
     return toast("Approve", "that does not look like a request code", "err");
   }
   if (r.deadline * 1000 < Date.now()) return toast("Approve", "this request has expired", "err");
+  if (wrongChainRequest(r)) {
+    return toast("Approve", `this was signed for chain ${r.chainId}, not ${state.cfg.network}`, "err");
+  }
 
   return send("Register identity", async () =>
     (await writer("DIDRegistry")).registerFor(r.subject, r.docURI, r.deadline, r.signature)
@@ -538,6 +567,7 @@ const HELP = {
   burn: "Destroys the asset entirely. Prefer Revoke for a credential - burning erases the record, which is usually the wrong thing for an audit. Needs BURN_ASSET.",
   verifyfile: "Choose the file someone handed you. Your browser hashes it and compares against what was committed at issuance, then tells you authentic, altered, or revoked.",
   audit: "Every privileged action, written by the contract that performed it, in the same transaction. Nothing here can be edited or deleted by anyone, including an administrator.",
+  chain: "The blocks underneath this platform. A node is a computer running Ethereum and holding the chain; this page reads from one over the internet. Each block carries the hash of the block before it, which is why an old entry cannot be quietly rewritten - its hash would change, and every block after it would stop matching.",
   network: "Which blockchain this page is reading. Your wallet must be on the same one to sign anything.",
 };
 
@@ -823,9 +853,12 @@ async function readChain() {
   const count = Number(await AuditTrail.entryCount());
   const entries = await AuditTrail.getEntries(count > 300 ? count - 300 : 0, 300);
 
+  await readBlocks(entries);
+
   renderMe();
   renderMismatch();
   renderGas();
+  renderBlocks();
   renderOnboarding();
   renderIdentities();
   renderAssets();
@@ -1112,9 +1145,11 @@ function previewRequest() {
     const r = decodeRequest(raw);
     const expired = r.deadline * 1000 < Date.now();
     const claimed = r.docURI.split("/").pop();
-    el.textContent = expired
-      ? `Request from ${short(r.subject)} has expired`
-      : `"${claimed}" at ${short(r.subject)} - they signed this name themselves; you cannot change it`;
+    el.textContent = wrongChainRequest(r)
+      ? `Signed for chain ${r.chainId}, but this page is ${state.cfg.network}. Ask them to sign again on the right network.`
+      : expired
+        ? `Request from ${short(r.subject)} has expired - ask them to sign a fresh one`
+        : `"${claimed}" at ${short(r.subject)} - they signed this name themselves; you cannot change it`;
   } catch {
     el.textContent = "Not a valid request code";
   }
@@ -1302,6 +1337,105 @@ function renderAssets() {
       toast(`Asset #${a.id}`, match ? `"${src}" matches the issued hash` : `"${src}" does not match`, match ? "ok" : "err");
     };
     box.append(el);
+  }
+}
+
+const BLOCKS_SHOWN = 6;
+const recentBlockNumbers = () => [...state.chain.blocks.keys()].sort((a, b) => b - a).slice(0, BLOCKS_SHOWN);
+
+/**
+ * Everything else on this page is the platform's own account of itself. This is the chain
+ * underneath it: the blocks those transactions actually landed in, each one carrying the
+ * hash of the block before it. That linkage is the whole argument for putting an audit
+ * trail here rather than in a database - edit an old entry and every hash after it stops
+ * matching, so the tampering is not hidden, it is arithmetic.
+ *
+ * Which blocks hold platform activity is already known, because every audit entry records
+ * its own block number on-chain. Only the block headers need fetching, and a mined block
+ * never changes, so each one is fetched once and kept.
+ */
+async function readBlocks(entries) {
+  const c = state.chain;
+  try {
+    c.head = await state.provider.getBlockNumber();
+    c.blocks = new Map();
+    for (const e of entries) {
+      const n = Number(e.blockNumber);
+      if (!c.blocks.has(n)) c.blocks.set(n, []);
+      c.blocks.get(n).push(ACTION_NAME[e.action] ?? shortDid(e.action));
+    }
+    for (const n of recentBlockNumbers()) {
+      if (c.headers.has(n)) continue;
+      const b = await state.provider.getBlock(n);
+      if (b) c.headers.set(n, { hash: b.hash, parentHash: b.parentHash, time: Number(b.timestamp) });
+    }
+    c.failed = false;
+  } catch {
+    // A rate-limited endpoint must not take the rest of the page down with it: the
+    // identities, assets and audit trail above have already been read successfully.
+    c.failed = true;
+  }
+}
+
+function renderBlocks() {
+  const c = state.chain;
+  const head = $("#chain-head");
+  head.textContent = c.head ? `network is at block ${c.head.toLocaleString()}` : "reading…";
+  head.className = c.failed ? "pill pill-muted" : "pill pill-good";
+
+  $("#chain-node").innerHTML = `Read live from a node at <span class="mono">${esc(state.rpcUrl)}</span>.
+    Every block names the hash of the block before it, so changing anything in an old block
+    changes its hash, and every block after it stops pointing anywhere real.`;
+
+  const box = $("#blocks");
+  const numbers = recentBlockNumbers();
+  if (!numbers.length) {
+    box.innerHTML = `<div class="empty">Nothing from this platform is on the chain yet.</div>`;
+    return;
+  }
+
+  box.innerHTML = "";
+  numbers.forEach((n, idx) => {
+    const h = c.headers.get(n);
+    const el = document.createElement("div");
+    el.className = "block";
+    const title = `Block ${n.toLocaleString()}`;
+    el.innerHTML = `
+      <div class="block-head">
+        <span class="num">${
+          state.cfg.explorer
+            ? `<a href="${esc(state.cfg.explorer)}/block/${n}" target="_blank" rel="noopener">${title}</a>`
+            : title
+        }</span>
+        <span class="when">${h ? new Date(h.time * 1000).toLocaleString() : "…"}</span>
+      </div>
+      <div class="hashes">
+        <div><span class="k">this block's hash</span><span class="v mono">${h ? esc(h.hash) : "…"}</span></div>
+        <div><span class="k">the block before</span><span class="v mono prev">${h ? esc(h.parentHash) : "…"}</span></div>
+      </div>
+      <div class="chips">${(c.blocks.get(n) ?? [])
+        .map((a) => `<span class="chip role">${esc(a)}</span>`)
+        .join("")}</div>`;
+    box.append(el);
+
+    const older = numbers[idx + 1];
+    if (older !== undefined) {
+      const gap = n - older - 1;
+      const sep = document.createElement("div");
+      sep.className = "block-gap";
+      sep.textContent =
+        gap === 0
+          ? "directly on top - the \"block before\" above is the block hash below"
+          : `${gap.toLocaleString()} block${gap === 1 ? "" : "s"} of other people's transactions in between`;
+      box.append(sep);
+    }
+  });
+
+  if (state.cfg.deployedAtBlock) {
+    const root = document.createElement("div");
+    root.className = "block-gap root";
+    root.textContent = `…back to block ${Number(state.cfg.deployedAtBlock).toLocaleString()}, where this platform was deployed`;
+    box.append(root);
   }
 }
 
