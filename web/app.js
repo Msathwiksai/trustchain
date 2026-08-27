@@ -19,6 +19,7 @@ const PERMS = [
   ["FREEZE_ASSET", 1n << 5n],
   ["BURN_ASSET", 1n << 6n],
   ["READ_AUDIT", 1n << 7n],
+  ["REVOKE_ASSET", 1n << 8n],
 ];
 const PERM = Object.fromEntries(PERMS);
 
@@ -791,7 +792,14 @@ async function readChain() {
   gate();
 }
 
-const can = (name) => (state.perms & PERM[name]) === PERM[name];
+const can = (name) => {
+  const bit = PERM[name];
+  if (bit === undefined) {
+    console.warn('unknown permission gate: ' + name);
+    return false;
+  }
+  return (state.perms & bit) === bit;
+};
 const label = (addr) => state.labels.get((addr || "").toLowerCase()) ?? short(addr);
 
 function gate() {
