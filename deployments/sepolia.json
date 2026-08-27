@@ -3,12 +3,12 @@
   "chainId": 11155111,
   "rpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
   "explorer": "https://sepolia.etherscan.io",
-  "deployedAtBlock": 11570278,
+  "deployedAtBlock": 11577395,
   "rootAdmin": "0x7b4d8d81a65e748B711543b21eD392199D93A989",
-  "auditTrail": "0x963B421CB8d4799A8A6ce76395b2FB615e14Be95",
-  "didRegistry": "0x3c8D7e0EEDE96182EB5cb0b245C719E1a827D78e",
-  "roleManager": "0x3145495e44B980504C3309A73BfA03faF525d84E",
-  "assetNFT": "0x378C8F7ba93bD9707c1C01EB40cCD9b6D341509e",
+  "auditTrail": "0xD45AaeDc41a61968d6aD53830904385Acb575dD6",
+  "didRegistry": "0xd9896720417e4579442a104cEdEFa9B96335f1F2",
+  "roleManager": "0xEf2b08Fb7080eb7022F67817740C5f595Ac3477E",
+  "assetNFT": "0xb1567A95564a63f78f66d80d5f42D5229A31F5Cf",
   "accounts": [
     {
       "name": "admin",
@@ -17,12 +17,22 @@
     },
     {
       "name": "records-office",
-      "address": "0x82f3e6113347af08497ef0c782CEB8364B6493B4",
+      "address": "0x466a960A5045C23cF58fB1859c3Af6dA3f620c0B",
       "role": "Manager"
     },
     {
+      "name": "compliance",
+      "address": "0x53d94359f350267Cdc8B8eeea40E3392CFf1d4B4",
+      "role": "Auditor"
+    },
+    {
       "name": "r-kumar",
-      "address": "0x24DF19472643906DADB2dE9680376E3D67231248",
+      "address": "0x2cbD328bDBccF3082bDd62D17C17f664e526b5F9",
+      "role": "User"
+    },
+    {
+      "name": "s-nair",
+      "address": "0xf7B2dAc247D1DAd06dDCb025C902232708ab9412",
       "role": "User"
     }
   ]
