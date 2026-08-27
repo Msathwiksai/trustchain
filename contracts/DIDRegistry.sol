@@ -37,6 +37,11 @@ contract DIDRegistry is IDIDRegistry, EIP712 {
 
     address public governor;
     IRoleManager public roleManager;
+
+    /// @notice Once true, the RoleManager can never be repointed. Every permission check
+    ///         in the platform routes through that contract, so a governor able to swap it
+    ///         is a governor able to grant themselves everything. Deployment locks it.
+    bool public roleManagerLocked;
     IAuditTrail public immutable auditTrail;
 
     mapping(bytes32 => Identity) private _identities;
@@ -85,6 +90,7 @@ contract DIDRegistry is IDIDRegistry, EIP712 {
     event ControllerRotated(bytes32 indexed didHash, address indexed from, address indexed to);
     event IdentityRevoked(bytes32 indexed didHash, address indexed by);
     event RoleManagerUpdated(address indexed roleManager);
+    event RoleManagerLocked(address indexed roleManager);
     event GuardiansSet(bytes32 indexed didHash, uint8 threshold, uint64 delay, uint256 count);
     event RecoveryStarted(bytes32 indexed didHash, address indexed proposed, bytes32 indexed by, uint64 executableAt);
     event RecoveryApproved(bytes32 indexed didHash, bytes32 indexed by, uint8 approvals, uint8 threshold);
@@ -102,6 +108,7 @@ contract DIDRegistry is IDIDRegistry, EIP712 {
     error ZeroAddress();
     error RoleManagerUnset();
     error LastAdmin();
+    error RoleManagerIsLocked();
     error NoProposal();
     error NotGuardian();
     error BadGuardianSet();
@@ -122,9 +129,18 @@ contract DIDRegistry is IDIDRegistry, EIP712 {
     /// @notice RoleManager is deployed after this contract (it reads identities), so it is wired in here.
     function setRoleManager(address roleManager_) external {
         if (msg.sender != governor) revert NotGovernor();
+        if (roleManagerLocked) revert RoleManagerIsLocked();
         if (roleManager_ == address(0)) revert ZeroAddress();
         roleManager = IRoleManager(roleManager_);
         emit RoleManagerUpdated(roleManager_);
+    }
+
+    /// @notice Freeze the RoleManager permanently. There is no unlock.
+    function lockRoleManager() external {
+        if (msg.sender != governor) revert NotGovernor();
+        if (address(roleManager) == address(0)) revert RoleManagerUnset();
+        roleManagerLocked = true;
+        emit RoleManagerLocked(address(roleManager));
     }
 
     function transferGovernor(address newGovernor) external {

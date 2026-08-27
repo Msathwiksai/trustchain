@@ -46,6 +46,9 @@ async function deployPlatform(deployer, opts = {}) {
   await settle(await auditTrail.setWriter(await roleManager.getAddress(), true));
   await settle(await roleManager.connect(deployer).bootstrap());
   await settle(await didRegistry.setRoleManager(await roleManager.getAddress()));
+  // Every permission check routes through the RoleManager, so freeze which contract that
+  // is before anyone can be tempted to swap it.
+  await settle(await didRegistry.lockRoleManager());
   log(`RoleManager   ${await roleManager.getAddress()}`);
 
   const AssetNFT = await ethers.getContractFactory("AssetNFT", deployer);

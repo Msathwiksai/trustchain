@@ -214,6 +214,12 @@ deployment freezes it as the final wiring step. After that no governor - present
 can add a writer. The four platform contracts are the only things that can ever append, and
 that is now a property of the code rather than a promise about behaviour.
 
+The same argument applies to the RoleManager. Every permission check in the platform
+routes through `DIDRegistry.roleManager`, so a governor able to repoint it could swap in a
+contract that approves everyone and silently own the system. `lockRoleManager()` freezes
+which contract that is, and deployment calls it. With both locks in place the governor has
+no powers left at all: authority lives entirely in roles, which are on-chain and visible.
+
 What still requires trust: the root administrator holds every permission. Handing `ADMIN`
 to a multisig or a timelock and revoking the original grant is supported today and is what a
 production deployment should do.
