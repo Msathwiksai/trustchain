@@ -12,6 +12,14 @@
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
+/**
+ * Any class here that sets `display` silently outranks the browser's own rule for the
+ * hidden attribute - which is how the administrator-only approval form ended up on screen
+ * for visitors with no wallet at all, its button greyed out and nothing explaining why.
+ * Hiding something in JavaScript must actually hide it.
+ */
+[hidden] { display: none !important; }
+
 * { box-sizing: border-box; }
 
 body {
@@ -211,6 +219,14 @@ ol.onboard label.named span { font-size: 11px; text-transform: uppercase; letter
   font-size: 13px;
 }
 .mismatch b { color: #ffd98a; }
+.mismatch .links { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mismatch a.btn {
+  text-decoration: none; border-radius: 7px; padding: 5px 11px; font-size: 12px; font-weight: 600;
+  background: transparent; color: inherit; border: 1px solid currentColor; opacity: .85;
+}
+.mismatch a.btn:hover { opacity: 1; }
+/* Running low on gas is a chore, not a fault - it should not shout like a wrong network. */
+.mismatch.gas { background: #14283a; border-bottom-color: #1d4a6b; color: #8ec5f0; }
 
 .pill-wait { background: #3a2a12; color: #f3c46b; }
 .chip.wait { background: #3a2a12; border-color: #6b4a17; color: #f3c46b; }

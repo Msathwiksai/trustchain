@@ -24,6 +24,20 @@ const PERMS = [
 const PERM = Object.fromEntries(PERMS);
 
 const ROLE_LIST = ["ADMIN", "MANAGER", "AUDITOR", "USER"];
+
+/**
+ * Running out of test ETH mid-demonstration looks exactly like the platform being broken:
+ * every button still works, and the failure arrives in MetaMask. Named per chain, because
+ * a local chain has no faucet and pointing anyone at one there would be nonsense.
+ */
+const FAUCETS = {
+  11155111: [
+    ["Mine some yourself", "https://sepolia-faucet.pk910.de/"],
+    ["Google faucet", "https://cloud.google.com/application/web3/faucet/ethereum/sepolia"],
+    ["Alchemy faucet", "https://www.alchemy.com/faucets/ethereum-sepolia"],
+  ],
+};
+const LOW_GAS = 1000000000000000n; // 0.001 ETH - a few transactions' worth, no more
 const ROLE_ID = Object.fromEntries(ROLE_LIST.map((r) => [r, ethers.id(`ROLE_${r}`)]));
 const ROLE_NAME = Object.fromEntries(ROLE_LIST.map((r) => [ROLE_ID[r], r[0] + r.slice(1).toLowerCase()]));
 
@@ -61,6 +75,8 @@ const state = {
   errors: null,
   actor: null, // connected wallet account, or null
   wrongChain: false,
+  walletLocked: false, // authorised, but MetaMask is locked and reports no accounts
+  walletChain: null, // the chain the wallet sits on, known even while disconnected
   perms: 0n,
   balance: 0n,
   request: null, // signed identity request awaiting an administrator
@@ -172,17 +188,7 @@ async function boot() {
 
     // Reconnect silently if this site is already authorised. Time-boxed, and failure
     // here costs the reader nothing: the page is already usable, just read-only.
-    const existing = await askWallet("eth_accounts");
-    if (existing?.length) {
-      await connect({ silent: true }).catch(() => {});
-    } else if (existing === null) {
-      toast(
-        "Your wallet did not respond",
-        "open MetaMask and clear any pending prompts, then reload. The page below is read-only until then.",
-        "err",
-        true
-      );
-    }
+    await trySilentConnect();
   }
 }
 
@@ -242,6 +248,37 @@ async function connect({ silent = false } = {}) {
 
   renderWallet();
   await refresh();
+}
+
+/**
+ * A laptop that was switched off comes back with MetaMask locked, and a locked wallet
+ * reports no accounts at all - even though this site is still authorised and nothing was
+ * actually revoked. The old code asked once, at load, and then left the reader looking at
+ * a page that said "not connected" with no hint that the fix was to type their MetaMask
+ * password. This keeps asking quietly on every poll, so the page reconnects itself the
+ * moment the wallet is open again, and says plainly which of the two states it is in.
+ */
+async function trySilentConnect() {
+  if (state.actor || !injected()) return;
+  const accounts = await askWallet("eth_accounts");
+  state.walletChain = Number(await askWallet("eth_chainId")) || null;
+  state.walletLocked = !accounts?.length && (await walletIsLocked());
+  if (accounts?.length) {
+    await connect({ silent: true }).catch(() => {});
+  } else {
+    renderWallet();
+    renderMismatch();
+  }
+}
+
+/** MetaMask exposes this; other wallets may not, and "unknown" must not read as locked. */
+async function walletIsLocked() {
+  try {
+    const unlocked = injected()?._metamask?.isUnlocked?.();
+    return unlocked === undefined ? false : !(await unlocked);
+  } catch {
+    return false;
+  }
 }
 
 async function walletChainId() {
@@ -484,7 +521,7 @@ const HELP = {
   key: "The wallet controlling this identity right now. This CAN change, through key rotation or guardian recovery. The DID above stays the same.",
   docuri: "A pointer to their identity document, stored off-chain. The pointer is public; the document is not.",
   rolechip: "The role this identity holds. Permissions come from the role, so taking the role away removes all of them at once.",
-  rolepick: "Choose which role to give or take away. Careful: this starts on ADMIN, which grants every permission on the platform.",
+  rolepick: "Choose which role to give or take away. Nothing is preselected, so a row never implies a role this person does not hold. Admin grants every permission on the platform, so it asks you to confirm by name.",
   grant: "Gives the selected role to this person. Needs MANAGE_ROLES, and you can only grant roles you administer - a Manager can create Users but never another Manager.",
   revokerole: "Takes the selected role away. They keep their identity and any other roles; only this one's permissions stop working.",
   revokeid: "Kills the identity itself. Every role dies at once and it cannot be undone. Use it when someone leaves the organisation - not to remove one permission.",
@@ -732,6 +769,9 @@ async function refresh() {
   } finally {
     state.refreshing = false;
   }
+  // Outside the guard, so a wallet that has just been unlocked is picked up on the very
+  // next poll without anybody having to reload the page or click anything.
+  if (!state.actor && injected()) await trySilentConnect();
 }
 
 async function readChain() {
@@ -785,6 +825,7 @@ async function readChain() {
 
   renderMe();
   renderMismatch();
+  renderGas();
   renderOnboarding();
   renderIdentities();
   renderAssets();
@@ -811,9 +852,17 @@ function gate() {
       return;
     }
     const owned = sameAddr(b.dataset.owner, state.actor);
-    const allowed = owned || can(need);
+    let allowed = owned || can(need);
+    let why = allowed ? "" : `requires ${need}`;
+    if (allowed && b.hasAttribute("data-needs-role")) {
+      const pick = b.closest(".actions")?.querySelector(".role-pick");
+      if (pick && !pick.value) {
+        allowed = false;
+        why = "choose a role first";
+      }
+    }
     b.disabled = !allowed;
-    b.title = allowed ? "" : `requires ${need}`;
+    b.title = why;
   });
 }
 
@@ -835,14 +884,20 @@ function renderNetworkPicker(available) {
 
 function renderMismatch() {
   const bar = $("#mismatch");
-  if (!state.actor || !state.wrongChain) {
+  // The wallet's chain is worth saying even before anyone connects: a MetaMask left on a
+  // dead practice network is exactly when the reader most needs to be told, because every
+  // button is disabled and nothing on the page explains why.
+  const elsewhere = state.actor
+    ? state.wrongChain
+    : state.walletChain != null && state.walletChain !== Number(state.cfg.chainId);
+  if (!injected() || !elsewhere) {
     bar.hidden = true;
     return;
   }
   bar.hidden = false;
-  bar.innerHTML = `<span>Your wallet is on a different network, so this page is read-only.
-    It is showing <b>${esc(state.cfg.network)}</b>.</span>
-    <button class="small" id="do-switch">Switch wallet to ${esc(state.cfg.network)}</button>`;
+  bar.innerHTML = `<span>MetaMask is on a different network, so nothing here can be signed.
+    This page is showing <b>${esc(state.cfg.network)}</b>.</span>
+    <button class="small" id="do-switch">Switch MetaMask to ${esc(state.cfg.network)}</button>`;
   $("#do-switch").onclick = async () => {
     await ensureChain();
     renderMismatch();
@@ -850,18 +905,51 @@ function renderMismatch() {
   };
 }
 
+/** Says so before the wallet does, and offers the three ways out of it. */
+function renderGas() {
+  const bar = $("#lowgas");
+  const faucets = FAUCETS[Number(state.cfg.chainId)];
+  if (!state.actor || !faucets || state.balance >= LOW_GAS) {
+    bar.hidden = true;
+    return;
+  }
+  const empty = state.balance === 0n;
+  bar.innerHTML =
+    `<span>${
+      empty
+        ? "You have no test ETH"
+        : `You are down to ${esc(Number(ethers.formatEther(state.balance)).toFixed(5))} ETH`
+    }, so the next transaction you sign will fail. Topping up is free, and this is not real money.</span>
+     <span class="links">${faucets
+       .map(([name, url]) => `<a class="btn ghost small" href="${url}" target="_blank" rel="noopener">${name}</a>`)
+       .join("")}
+     <button class="small ghost" id="gas-copy">Copy my address</button></span>`;
+  bar.hidden = false;
+  $("#gas-copy").onclick = () => copyText(state.actor, $("#gas-copy"), "Copied");
+}
+
 function renderWallet() {
   const btn = $("#connect");
   const tag = $("#wallet-label");
 
   if (!state.actor) {
-    tag.textContent = injected() ? "not connected" : "MetaMask not detected";
-    tag.className = "pill pill-muted";
-    btn.textContent = "Connect MetaMask";
+    // "Locked" and "not connected" need different things from the reader - a password in
+    // one case, a click in the other - so they must not look the same.
+    tag.textContent = !injected()
+      ? "MetaMask not detected"
+      : state.walletLocked
+        ? "MetaMask is locked"
+        : "not connected";
+    tag.className = state.walletLocked ? "pill pill-wait" : "pill pill-muted";
+    btn.textContent = state.walletLocked ? "Unlock MetaMask" : "Connect MetaMask";
+    btn.title = state.walletLocked
+      ? "your wallet is still authorised - it just needs your password"
+      : "";
     btn.onclick = connect;
     btn.disabled = false;
     return;
   }
+  btn.title = "";
 
   const name = state.labels.get(state.actor.toLowerCase());
   tag.textContent = (name ? name + " · " : "") + short(state.actor);
@@ -874,6 +962,7 @@ function renderWallet() {
 function renderMe() {
   const me = state.identities.find((i) => sameAddr(i.controller, state.actor));
   $("#me-key").textContent = state.actor ?? "no wallet connected";
+  $("#me-gas").textContent = state.actor ? Number(ethers.formatEther(state.balance)).toFixed(5) : "–";
   $("#me-did").textContent = me
     ? `did:tcid:${state.cfg.chainId}:${me.controller.toLowerCase()}`
     : state.actor
@@ -1075,16 +1164,22 @@ function renderIdentities() {
         }
       </div>
       <div class="actions">
-        <select class="role-pick">${ROLE_LIST.map((r) => `<option value="${ROLE_ID[r]}">${r}</option>`).join("")}</select>${helpBtn("rolepick")}
-        <button class="small grant" data-perm="MANAGE_ROLES">Grant</button>${helpBtn("grant")}
-        <button class="small ghost revoke-role" data-perm="MANAGE_ROLES">Revoke role</button>${helpBtn("revokerole")}
+        <select class="role-pick"><option value="">Choose a role…</option>${ROLE_LIST.map(
+          (r) => `<option value="${ROLE_ID[r]}">${r}</option>`
+        ).join("")}</select>${helpBtn("rolepick")}
+        <button class="small grant" data-perm="MANAGE_ROLES" data-needs-role>Grant</button>${helpBtn("grant")}
+        <button class="small ghost revoke-role" data-perm="MANAGE_ROLES" data-needs-role>Revoke role</button>${helpBtn("revokerole")}
         <button class="small danger revoke-id" data-perm="REVOKE_IDENTITY" data-owner="${i.controller}">Revoke identity</button>${helpBtn("revokeid")}
       </div>`;
 
     const role = () => el.querySelector(".role-pick").value;
+    // Nothing is preselected, so a row never reads as though this person already holds
+    // whichever role happened to sit at the top of the list. The two buttons stay
+    // disabled until a role is actually chosen.
+    el.querySelector(".role-pick").onchange = gate;
     el.querySelector(".grant").onclick = async () => {
       const who = label(i.controller) === short(i.controller) ? i.docURI.split("/").pop() : label(i.controller);
-      // The dropdown starts on ADMIN, so this is the easiest mistake on the whole page.
+      // Admin is the one grant that cannot be quietly undone, so it is confirmed by name.
       if (role() === ROLE_ID.ADMIN) {
         const ok = await confirmAction({
           title: `Make ${who} an administrator?`,
