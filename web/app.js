@@ -43,9 +43,13 @@ const ROLE_NAME = Object.fromEntries(ROLE_LIST.map((r) => [ROLE_ID[r], r[0] + r.
 
 const ACTION_NAME = Object.fromEntries(
   [
+    // Every code in the Actions library. A missing one shows as a truncated hash, which
+    // reads as a bug in the very panel meant to prove nothing is hidden.
     "IDENTITY_REGISTERED", "IDENTITY_UPDATED", "IDENTITY_ROTATED", "IDENTITY_REVOKED",
     "ROLE_GRANTED", "ROLE_REVOKED", "ROLE_PERMS_UPDATED",
     "ASSET_MINTED", "ASSET_TRANSFERRED", "ASSET_FROZEN", "ASSET_UNFROZEN", "ASSET_BURNED",
+    "ASSET_REVOKED", "ASSET_REINSTATED",
+    "GUARDIANS_SET", "RECOVERY_STARTED", "RECOVERY_APPROVED", "RECOVERY_CANCELLED",
   ].map((n) => [ethers.id(n), n])
 );
 
@@ -83,7 +87,8 @@ const state = {
   requestName: "",
   refreshing: false,
   spotlightUntil: 0,
-  labels: new Map(), // lowercase address -> friendly name from the seed script
+  labels: new Map(), // lowercase address -> friendly name
+  seedLabels: new Set(), // the ones named by the deployment file, which nobody may override
   identities: [],
   assets: [],
   revocations: new Map(), // token id -> { reason, by }, read from the event log
@@ -162,7 +167,10 @@ async function boot() {
   }
   for (const n of NAMES) state.read[n] = new ethers.Contract(state.cfg[KEY[n]], abis[n], state.provider);
 
-  for (const a of state.cfg.accounts ?? []) state.labels.set(a.address.toLowerCase(), a.name);
+  for (const a of state.cfg.accounts ?? []) {
+    state.labels.set(a.address.toLowerCase(), a.name);
+    state.seedLabels.add(a.address.toLowerCase()); // named by the deployment, not by themselves
+  }
 
   const status = $("#status");
   status.textContent = `${state.cfg.network} · chain ${state.cfg.chainId}`;
@@ -837,6 +845,18 @@ async function readChain() {
     })
   );
 
+  // Someone who registered through this page names themselves in their own document, and
+  // that name should follow them everywhere - the audit trail and the asset cards, not
+  // only the identity list. Deployment-supplied names win, so nobody can relabel a seeded
+  // account by choosing a confusing document name.
+  for (const i of state.identities) {
+    const key = i.controller.toLowerCase();
+    if (state.seedLabels.has(key)) continue;
+    const claimed = i.docURI.split("/").pop();
+    if (claimed && !sameAddr(claimed, i.controller)) state.labels.set(key, claimed);
+    else state.labels.delete(key);
+  }
+
   const total = Number(await AssetNFT.totalMinted());
   const ids = Array.from({ length: total }, (_, i) => i + 1);
   state.assets = await Promise.all(
@@ -857,27 +877,6 @@ async function readChain() {
     })
   );
 
-  // A revocation without its stated reason is the cruellest half of the record: it shows
-  // that a credential was withdrawn and says nothing about whose fault that was. The
-  // reason lives in the event log, so fetch it once per revoked asset and keep it.
-  for (const a of state.assets) {
-    if (!a.revoked) {
-      state.revocations.delete(a.id);
-      continue;
-    }
-    if (state.revocations.has(a.id)) continue;
-    try {
-      const logs = await AssetNFT.queryFilter(
-        AssetNFT.filters.AssetRevoked(a.id),
-        Number(state.cfg.deployedAtBlock) || 0
-      );
-      const last = logs[logs.length - 1];
-      if (last) state.revocations.set(a.id, { reason: last.args.reason, by: last.args.by });
-    } catch {
-      /* the endpoint refused the range; the card simply shows no reason */
-    }
-  }
-
   if (state.actor && injected()) state.wrongChain = !(await onPlatformChain());
   state.perms = state.actor ? await RoleManager.permissionsOf(state.actor) : 0n;
   state.balance = state.actor ? await state.provider.getBalance(state.actor) : 0n;
@@ -887,6 +886,7 @@ async function readChain() {
   const count = Number(await AuditTrail.entryCount());
   const entries = await AuditTrail.getEntries(count > 300 ? count - 300 : 0, 300);
 
+  await readRevocations(entries);
   await readBlocks(entries);
 
   renderMe();
@@ -1404,6 +1404,41 @@ function renderAssets() {
       toast(`Asset #${a.id}`, match ? `"${src}" matches the issued hash` : `"${src}" does not match`, match ? "ok" : "err");
     };
     box.append(el);
+  }
+}
+
+/**
+ * A revocation without its stated reason is the cruellest half of the record: it says a
+ * credential was withdrawn and nothing about whose fault that was. The reason is in the
+ * event log rather than in storage, and asking an endpoint to search thousands of blocks
+ * for it is both wasteful and the first thing a rate-limited provider refuses. The audit
+ * entry already records the exact block, so ask about that one block.
+ */
+async function readRevocations(entries) {
+  const revokedAt = new Map();
+  for (const e of entries) {
+    if (e.action === ethers.id("ASSET_REVOKED")) revokedAt.set(BigInt(e.subject), Number(e.blockNumber));
+  }
+
+  for (const a of state.assets) {
+    if (!a.revoked) {
+      state.revocations.delete(a.id); // reinstated: the old reason no longer describes it
+      continue;
+    }
+    if (state.revocations.has(a.id)) continue;
+    const block = revokedAt.get(BigInt(a.id));
+    if (block === undefined) continue; // older than the entries we hold
+    try {
+      const logs = await state.read.AssetNFT.queryFilter(
+        state.read.AssetNFT.filters.AssetRevoked(a.id),
+        block,
+        block
+      );
+      const last = logs[logs.length - 1];
+      if (last) state.revocations.set(a.id, { reason: last.args.reason, by: last.args.by });
+    } catch {
+      /* the card simply shows no reason rather than the page failing */
+    }
   }
 }
 
