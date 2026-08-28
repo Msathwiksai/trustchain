@@ -257,6 +257,12 @@ ol.onboard label.named span { font-size: 11px; text-transform: uppercase; letter
 /* Running low on gas is a chore, not a fault - it should not shout like a wrong network. */
 .mismatch.gas { background: #14283a; border-bottom-color: #1d4a6b; color: #8ec5f0; }
 
+/* The stated reason for a revocation is the holder's defence, so it is not a footnote. */
+.sub.reason { color: #f3c46b; font-style: italic; }
+
+.confirm-field { display: flex; flex-direction: column; gap: 5px; margin: 12px 0 4px; }
+.confirm-field span { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+
 .pill-wait { background: #3a2a12; color: #f3c46b; }
 .chip.wait { background: #3a2a12; border-color: #6b4a17; color: #f3c46b; }
 

@@ -86,6 +86,7 @@ const state = {
   labels: new Map(), // lowercase address -> friendly name from the seed script
   identities: [],
   assets: [],
+  revocations: new Map(), // token id -> { reason, by }, read from the event log
   chain: {
     head: 0, // latest block on the network, whether or not it concerns us
     blocks: new Map(), // block number -> action names recorded in it
@@ -564,7 +565,7 @@ const HELP = {
   mint: "Issues the asset on-chain to the chosen identity, with you recorded as the issuer. Needs MINT_ASSET.",
   transfer: "Moves the asset to another identity. You can move your own; moving somebody else's needs TRANSFER_ASSET and is logged as a custodial action.",
   freeze: "Temporarily stops an asset moving, for a dispute or an investigation. It stays valid and verifiable - it just cannot change hands. Needs FREEZE_ASSET.",
-  revokeasset: "Rescinds a credential without deleting it: a degree withdrawn, a licence lapsed. It stops verifying as valid, but the record stays so the history remains honest. Only the issuer, or REVOKE_ASSET.",
+  revokeasset: "Rescinds a credential without deleting it: a degree withdrawn, a licence lapsed, or one issued in error. It stops verifying as valid, but the record stays so the history remains honest. You are asked for a reason, and that sentence goes on the chain - it is what tells a stranger whether the holder did anything wrong. Only the issuer, or REVOKE_ASSET.",
   burn: "Destroys the asset entirely. Prefer Revoke for a credential - burning erases the record, which is usually the wrong thing for an audit. Needs BURN_ASSET.",
   verifyfile: "Choose the file someone handed you. Your browser hashes it and compares against what was committed at issuance, then tells you authentic, altered, or revoked.",
   audit: "Every privileged action, written by the contract that performed it, in the same transaction. Nothing here can be edited or deleted by anyone, including an administrator.",
@@ -604,12 +605,22 @@ function initHelp() {
  * A dialog for the actions that cannot be undone. Cancel holds focus, so a stray Enter
  * or a double-click on the button underneath does nothing.
  */
-function confirmAction({ title, body, consequence, confirmLabel }) {
+function confirmAction({ title, body, consequence, confirmLabel, ask, placeholder = "", value = "" }) {
   const dlg = $("#confirm");
   $("#confirm-title").textContent = title;
   $("#confirm-body").textContent = body;
   $("#confirm-consequence").textContent = consequence;
   $("#confirm-go").textContent = confirmLabel;
+
+  // Some confirmations need a sentence from the person confirming, not just their assent.
+  const field = $("#confirm-field");
+  const input = $("#confirm-input");
+  field.hidden = !ask;
+  if (ask) {
+    $("#confirm-label").textContent = ask;
+    input.placeholder = placeholder;
+    input.value = value;
+  }
 
   return new Promise((resolve) => {
     const done = (ok) => {
@@ -617,13 +628,13 @@ function confirmAction({ title, body, consequence, confirmLabel }) {
       $("#confirm-go").onclick = null;
       $("#confirm-cancel").onclick = null;
       dlg.onclose = null;
-      resolve(ok);
+      resolve(ask && ok ? input.value.trim() : ok);
     };
     $("#confirm-go").onclick = () => done(true);
     $("#confirm-cancel").onclick = () => done(false);
     dlg.onclose = () => resolve(false); // Escape, or the backdrop
     dlg.showModal();
-    $("#confirm-cancel").focus();
+    (ask ? input : $("#confirm-cancel")).focus();
   });
 }
 
@@ -845,6 +856,27 @@ async function readChain() {
       };
     })
   );
+
+  // A revocation without its stated reason is the cruellest half of the record: it shows
+  // that a credential was withdrawn and says nothing about whose fault that was. The
+  // reason lives in the event log, so fetch it once per revoked asset and keep it.
+  for (const a of state.assets) {
+    if (!a.revoked) {
+      state.revocations.delete(a.id);
+      continue;
+    }
+    if (state.revocations.has(a.id)) continue;
+    try {
+      const logs = await AssetNFT.queryFilter(
+        AssetNFT.filters.AssetRevoked(a.id),
+        Number(state.cfg.deployedAtBlock) || 0
+      );
+      const last = logs[logs.length - 1];
+      if (last) state.revocations.set(a.id, { reason: last.args.reason, by: last.args.by });
+    } catch {
+      /* the endpoint refused the range; the card simply shows no reason */
+    }
+  }
 
   if (state.actor && injected()) state.wrongChain = !(await onPlatformChain());
   state.perms = state.actor ? await RoleManager.permissionsOf(state.actor) : 0n;
@@ -1278,6 +1310,12 @@ function renderAssets() {
         </div>
       </div>
       <div class="sub mono">${esc(a.uri)}</div>
+      ${
+        a.revoked && state.revocations.has(a.id)
+          ? `<div class="sub reason">Revoked by ${esc(label(state.revocations.get(a.id).by))}:
+             &ldquo;${esc(state.revocations.get(a.id).reason)}&rdquo;</div>`
+          : ""
+      }
       <div class="sub mono">issued by ${esc(
         state.identities.find((i) => i.didHash === a.issuerDid)
           ? label(state.identities.find((i) => i.didHash === a.issuerDid).controller)
@@ -1312,11 +1350,25 @@ function renderAssets() {
     };
     el.querySelector(".freeze").onclick = () =>
       send(a.frozen ? "Unfreeze" : "Freeze", async () => (await writer("AssetNFT")).setFrozen(a.id, !a.frozen));
-    el.querySelector(".revoke-asset").onclick = () =>
-      send(a.revoked ? "Reinstate" : "Revoke", async () => {
-        const nft = await writer("AssetNFT");
-        return a.revoked ? nft.reinstateAsset(a.id) : nft.revokeAsset(a.id, "rescinded by issuer");
+    el.querySelector(".revoke-asset").onclick = async () => {
+      if (a.revoked) {
+        return send("Reinstate", async () => (await writer("AssetNFT")).reinstateAsset(a.id));
+      }
+      // The reason matters more than the revocation. A credential withdrawn because the
+      // issuer got it wrong, and one withdrawn because the holder was struck off, look
+      // identical on chain unless somebody says which - and the innocent holder is the
+      // one who needs that sentence to exist.
+      const reason = await confirmAction({
+        title: `Revoke asset #${a.id}?`,
+        body: `It stays on the record and keeps its history, but stops verifying as valid. Say why - this sentence is written to the chain and anyone can read it.`,
+        consequence: "If the mistake was yours as the issuer, say so here. It is the only thing that tells a stranger the holder did nothing wrong.",
+        confirmLabel: "Revoke",
+        ask: "Reason, in plain words",
+        placeholder: "issued in error by the registrar - corrected copy to follow",
       });
+      if (!reason) return;
+      send("Revoke", async () => (await writer("AssetNFT")).revokeAsset(a.id, reason));
+    };
     el.querySelector(".burn").onclick = async () => {
       const ok = await confirmAction({
         title: `Burn asset #${a.id}?`,
