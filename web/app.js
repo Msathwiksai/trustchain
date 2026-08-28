@@ -174,6 +174,7 @@ async function boot() {
   $("#mint-form").onsubmit = mint;
   $("#mint-file").onchange = previewMintFile;
   $("#approve-form").onsubmit = approveRequest;
+  $("#rename-form").onsubmit = renameSelf;
   $("#approve-code").oninput = previewRequest;
 
   initHelp();
@@ -567,6 +568,7 @@ const HELP = {
   burn: "Destroys the asset entirely. Prefer Revoke for a credential - burning erases the record, which is usually the wrong thing for an audit. Needs BURN_ASSET.",
   verifyfile: "Choose the file someone handed you. Your browser hashes it and compares against what was committed at issuance, then tells you authentic, altered, or revoked.",
   audit: "Every privileged action, written by the contract that performed it, in the same transaction. Nothing here can be edited or deleted by anyone, including an administrator.",
+  rename: "The readable name inside your DID document. Your identifier and your history never change - only the label. The contract lets the controller of an identity rewrite this and nobody else, and the change itself lands in the audit trail.",
   chain: "The blocks underneath this platform. A node is a computer running Ethereum and holding the chain; this page reads from one over the internet. Each block carries the hash of the block before it, which is why an old entry cannot be quietly rewritten - its hash would change, and every block after it would stop matching.",
   network: "Which blockchain this page is reading. Your wallet must be on the same one to sign anything.",
 };
@@ -1157,6 +1159,19 @@ function previewRequest() {
 
 function renderIdentities() {
   $("#approve-form").hidden = !can("REGISTER_IDENTITY");
+
+  const mine = state.identities.find((i) => sameAddr(i.controller, state.actor) && !i.revoked);
+  $("#rename-form").hidden = !mine;
+  if (mine) {
+    const current = mine.docURI.split("/").pop();
+    // A name that is just the address is what the field is for, so do not prefill it back.
+    if (document.activeElement !== $("#rename-name") && !$("#rename-name").value) {
+      $("#rename-name").value = sameAddr(current, mine.controller) ? "" : current;
+    }
+    $("#rename-why").textContent = sameAddr(current, mine.controller)
+      ? "Your document has no name in it, only your address. Set one - only you can."
+      : "Only you can change your own document. Nobody else can, including an administrator.";
+  }
   const box = $("#identities");
   const target = $("#mint-to");
   const active = state.identities.filter((i) => !i.revoked);
@@ -1460,6 +1475,21 @@ function renderAudit(entries, count) {
 }
 
 // -------------------------------------------------------------------- writes
+
+/**
+ * Anyone who signs a request without typing a name ends up identified by their own
+ * address, which is correct but unreadable - and until now there was no way back from it.
+ * The contract has always allowed the controller, and only the controller, to rewrite
+ * their own document. This is that, and the audit trail records the change.
+ */
+function renameSelf(ev) {
+  ev.preventDefault();
+  const name = slugify($("#rename-name").value);
+  if (!name) return toast("Save name", "type the name you want to appear", "err");
+  return send("Update my document", async () =>
+    (await writer("DIDRegistry")).updateDocument(`ipfs://did-document/${name}`)
+  );
+}
 
 function registerSelf() {
   const name = state.labels.get(state.actor.toLowerCase()) ?? state.actor.toLowerCase();

@@ -63,6 +63,15 @@
           <span class="pill pill-muted" id="pending-count" hidden></span>
           <button class="ghost" id="register-self">Register my identity</button>
         </header>
+        <form class="form" id="rename-form" hidden>
+          <label>The name in your own DID document
+            <input id="rename-name" placeholder="e.g. r-kumar" />
+          </label>
+          <div class="row bottom">
+            <span class="why" id="rename-why">Only you can change your own document. Nobody else can, including an administrator.</span>
+            <button id="rename-btn">Save this name</button><span class="helpslot" data-help-key="rename"></span>
+          </div>
+        </form>
         <form class="form" id="approve-form" hidden>
           <label>Identity request from someone with no ETH
             <input id="approve-code" placeholder="paste their request code" />
