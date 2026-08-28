@@ -16,7 +16,11 @@
     "preflight": "hardhat run scripts/preflight.js --network sepolia",
     "deploy:sepolia": "hardhat run scripts/deploy.js --network sepolia",
     "verify:sepolia": "hardhat run scripts/verify.js --network sepolia",
-    "bundle": "node scripts/bundle-console.js"
+    "bundle": "node scripts/bundle-console.js",
+    "chain": "node scripts/chain.js",
+    "chain:audit": "node scripts/chain.js audit 20",
+    "chain:blocks": "node scripts/chain.js blocks",
+    "chain:verify": "node scripts/chain.js verify"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",
