@@ -89,14 +89,20 @@ describe("Role boundaries", function () {
       ).to.be.revertedWithCustomError(f.roleManager, "AdminCannotExpire");
     });
 
-    it("hands over cleanly: a second Admin can be added, then the first stepped down", async function () {
+    it("hands over cleanly: a successor is appointed, then the incumbent stands down", async function () {
       const f = await loadFixture(platformFixture);
       const aliceDid = await f.did(f.alice);
 
       await f.roleManager.connect(f.admin).grantRole(aliceDid, ROLES.ADMIN, 0);
       expect(await f.roleManager.adminCount()).to.equal(2n);
 
-      await f.roleManager.connect(f.alice).revokeRole(await f.did(f.admin), ROLES.ADMIN);
+      // The successor cannot evict the incumbent - no administrator may remove another -
+      // so a handover is the outgoing administrator's own act.
+      await expect(
+        f.roleManager.connect(f.alice).revokeRole(await f.did(f.admin), ROLES.ADMIN)
+      ).to.be.revertedWithCustomError(f.roleManager, "AdminCannotRemoveAdmin");
+
+      await f.roleManager.connect(f.admin).renounceRole(ROLES.ADMIN);
 
       expect(await f.roleManager.hasRole(f.admin.address, ROLES.ADMIN)).to.equal(false);
       expect(await f.roleManager.hasRole(f.alice.address, ROLES.ADMIN)).to.equal(true);

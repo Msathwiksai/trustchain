@@ -22,4 +22,8 @@ contract EvilRoleManager is IRoleManager {
     function isLastAdmin(bytes32) external pure returns (bool) {
         return false;
     }
+
+    function isAdmin(bytes32) external pure returns (bool) {
+        return false;
+    }
 }

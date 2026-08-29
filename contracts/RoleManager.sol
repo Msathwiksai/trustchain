@@ -60,6 +60,7 @@ contract RoleManager is IRoleManager {
     error ZeroAddress();
     error ExpiryInPast();
     error LastAdmin();
+    error AdminCannotRemoveAdmin();
     error AdminCannotExpire();
 
     address public pendingRootAdmin;
@@ -166,6 +167,13 @@ contract RoleManager is IRoleManager {
         if (!_holdsRole(msg.sender, Roles.ADMIN) && !_holdsRole(msg.sender, def.adminRole)) {
             revert NotAuthorized();
         }
+        // One administrator may not remove another. Without this, appointing several
+        // administrators is no protection at all: the first to turn dishonest simply
+        // strips the rest and is left holding every permission on the platform, alone.
+        // Admin leaves by its holder's own hand - renounceRole - or not at all.
+        if (role == Roles.ADMIN && didHash != didRegistry.didOf(msg.sender)) {
+            revert AdminCannotRemoveAdmin();
+        }
         _revoke(didHash, role, msg.sender);
     }
 
@@ -254,6 +262,12 @@ contract RoleManager is IRoleManager {
     /// @notice True if revoking this identity would leave the platform with no administrator.
     function isLastAdmin(bytes32 didHash) external view override returns (bool) {
         return adminCount <= 1 && _isLive(_grants[didHash][Roles.ADMIN]);
+    }
+
+    /// @notice True if this identity holds a live Admin role. Consulted by the registry,
+    ///         which must not let one administrator revoke another's identity.
+    function isAdmin(bytes32 didHash) public view override returns (bool) {
+        return _isLive(_grants[didHash][Roles.ADMIN]);
     }
 
     function hasRole(address account, bytes32 role) external view returns (bool) {

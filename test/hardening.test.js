@@ -202,3 +202,60 @@ describe("Hardening", function () {
     });
   });
 });
+
+describe("one administrator cannot remove another", function () {
+  /** Three administrators, exactly as "appoint more admins" would have it. */
+  async function threeAdmins() {
+    const f = await loadFixture(platformFixture);
+    // bob already holds an identity from the fixture; the outsider does not.
+    await f.didRegistry.connect(f.outsider).register("ipfs://did-document/peer");
+    f.bobDid = await f.did(f.bob);
+    f.outsiderDid = await f.did(f.outsider);
+    await f.roleManager.connect(f.admin).grantRole(f.bobDid, ROLES.ADMIN, 0);
+    await f.roleManager.connect(f.admin).grantRole(f.outsiderDid, ROLES.ADMIN, 0);
+    expect(await f.roleManager.adminCount()).to.equal(3n);
+    return f;
+  }
+
+  it("cannot strip a peer's Admin role", async function () {
+    const f = await threeAdmins();
+    await expect(
+      f.roleManager.connect(f.bob).revokeRole(await f.did(f.admin), ROLES.ADMIN)
+    ).to.be.revertedWithCustomError(f.roleManager, "AdminCannotRemoveAdmin");
+    expect(await f.roleManager.hasRole(f.admin.address, ROLES.ADMIN)).to.equal(true);
+  });
+
+  it("cannot reach the same end by revoking a peer's identity", async function () {
+    const f = await threeAdmins();
+    await expect(
+      f.didRegistry.connect(f.bob).revoke(f.outsiderDid)
+    ).to.be.revertedWithCustomError(f.didRegistry, "AdminCannotRemoveAdmin");
+    expect(await f.roleManager.hasPermission(f.outsider.address, PERM.MINT_ASSET)).to.equal(true);
+  });
+
+  it("so appointing more administrators is now worth something", async function () {
+    const f = await threeAdmins();
+    // Whatever the rogue tries, the other two keep every permission they had.
+    await expect(f.roleManager.connect(f.bob).revokeRole(await f.did(f.admin), ROLES.ADMIN)).to.be.reverted;
+    await expect(f.didRegistry.connect(f.bob).revoke(await f.did(f.admin))).to.be.reverted;
+    expect(await f.roleManager.adminCount()).to.equal(3n);
+  });
+
+  it("an administrator may still stand down of their own accord", async function () {
+    const f = await threeAdmins();
+    await f.roleManager.connect(f.bob).renounceRole(ROLES.ADMIN);
+    expect(await f.roleManager.hasRole(f.bob.address, ROLES.ADMIN)).to.equal(false);
+    expect(await f.roleManager.adminCount()).to.equal(2n);
+  });
+
+  it("and can still revoke their own identity", async function () {
+    const f = await threeAdmins();
+    await expect(f.didRegistry.connect(f.bob).revoke(f.bobDid)).to.not.be.reverted;
+  });
+
+  it("non-admin roles are still removable by an administrator", async function () {
+    const f = await threeAdmins();
+    await f.roleManager.connect(f.admin).revokeRole(await f.did(f.manager), ROLES.MANAGER);
+    expect(await f.roleManager.hasRole(f.manager.address, ROLES.MANAGER)).to.equal(false);
+  });
+});

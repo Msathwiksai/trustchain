@@ -28,4 +28,7 @@ interface IRoleManager {
 
     /// @return true if revoking this identity would leave the platform with no administrator
     function isLastAdmin(bytes32 didHash) external view returns (bool);
+
+    /// @return true if this identity currently holds a live Admin role
+    function isAdmin(bytes32 didHash) external view returns (bool);
 }

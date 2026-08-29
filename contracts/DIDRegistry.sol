@@ -108,6 +108,7 @@ contract DIDRegistry is IDIDRegistry, EIP712 {
     error ZeroAddress();
     error RoleManagerUnset();
     error LastAdmin();
+    error AdminCannotRemoveAdmin();
     error RoleManagerIsLocked();
     error NoProposal();
     error NotGuardian();
@@ -436,6 +437,10 @@ contract DIDRegistry is IDIDRegistry, EIP712 {
         if (!isSelf) {
             if (address(roleManager) == address(0)) revert RoleManagerUnset();
             if (!roleManager.hasPermission(msg.sender, Perm.REVOKE_IDENTITY)) revert NotAuthorized();
+            // The role manager refuses to let one administrator revoke another's role. This
+            // is the same rule by its other door: an identity carries its roles, so killing
+            // an administrator's identity would remove them just as effectively.
+            if (roleManager.isAdmin(didHash)) revert AdminCannotRemoveAdmin();
         }
         // Roles resolve through the identity, so revoking the last administrator's identity
         // would strip its permissions just as surely as revoking the role itself.
