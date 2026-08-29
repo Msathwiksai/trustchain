@@ -92,6 +92,7 @@ const state = {
   identities: [],
   assets: [],
   revocations: new Map(), // token id -> { reason, by }, read from the event log
+  recovery: { mine: null, inFlight: null, watching: [] }, // guardians, mine and other people's
   chain: {
     head: 0, // latest block on the network, whether or not it concerns us
     blocks: new Map(), // block number -> action names recorded in it
@@ -577,6 +578,7 @@ const HELP = {
   burn: "Destroys the asset entirely. Prefer Revoke for a credential - burning erases the record, which is usually the wrong thing for an audit. Needs BURN_ASSET.",
   verifyfile: "Choose the file someone handed you. Your browser hashes it and compares against what was committed at issuance, then tells you authentic, altered, or revoked.",
   audit: "Every privileged action, written by the contract that performed it, in the same transaction. Nothing here can be edited or deleted by anyone, including an administrator.",
+  recovery: "Guardians are identities you nominate. If your key is ever lost, any threshold of them together can move your identity to a new key - and your roles and your assets move with it, because they were bound to the identity and never to the key. While the waiting period runs you can cancel, so a quorum cannot take your identity while you still hold it.",
   rename: "The readable name inside your DID document. Your identifier and your history never change - only the label. The contract lets the controller of an identity rewrite this and nobody else, and the change itself lands in the audit trail.",
   chain: "The blocks underneath this platform. A node is a computer running Ethereum and holding the chain; this page reads from one over the internet. Each block carries the hash of the block before it, which is why an old entry cannot be quietly rewritten - its hash would change, and every block after it would stop matching.",
   network: "Which blockchain this page is reading. Your wallet must be on the same one to sign anything.",
@@ -887,6 +889,7 @@ async function readChain() {
   const entries = await AuditTrail.getEntries(count > 300 ? count - 300 : 0, 300);
 
   await readRevocations(entries);
+  await readRecovery(DIDRegistry);
   await readBlocks(entries);
 
   renderMe();
@@ -895,6 +898,7 @@ async function readChain() {
   renderBlocks();
   renderOnboarding();
   renderIdentities();
+  renderRecovery();
   renderAssets();
   renderAudit(entries, count);
   gate();
@@ -1441,6 +1445,183 @@ async function readRevocations(entries) {
     }
   }
 }
+
+/**
+ * The claim this platform actually rests on is that an identity is not a key. You can
+ * only see that when the key is gone: guardians move the identity to a new one, and the
+ * roles and the assets come with it because they were never attached to the key.
+ *
+ * All of it has been in the contracts and the tests from the start; none of it was in
+ * the console, so the one thing worth showing could only be described.
+ */
+async function readRecovery(DIDRegistry) {
+  const out = { mine: null, inFlight: null, watching: [] };
+  state.recovery = out;
+  const me = state.identities.find((i) => sameAddr(i.controller, state.actor) && !i.revoked);
+  if (!me) return;
+  out.me = me;
+
+  const live = (r) => r.proposed && r.proposed !== ethers.ZeroAddress;
+  for (const id of state.identities) {
+    if (id.revoked) continue;
+    const [guardians, threshold, delay] = await DIDRegistry.guardiansOf(id.didHash);
+    const set = { guardians: [...guardians], threshold: Number(threshold), delay: Number(delay) };
+    const isMine = id.didHash === me.didHash;
+    if (isMine) out.mine = set;
+    if (!isMine && !set.guardians.includes(me.didHash)) continue;
+
+    const r = await DIDRegistry.recoveryOf(id.didHash);
+    const rec = live(r)
+      ? {
+          proposed: r.proposed,
+          approvals: Number(r.approvals),
+          threshold: Number(r.threshold),
+          executableAt: Number(r.executableAt),
+        }
+      : null;
+    if (isMine) out.inFlight = rec;
+    else out.watching.push({ id, set, rec });
+  }
+}
+
+function renderRecovery() {
+  const panel = $("#recovery-panel");
+  const me = state.recovery.me;
+  panel.hidden = !me;
+  if (!me) return;
+
+  const r = state.recovery;
+  const box = $("#recovery-body");
+  const pill = $("#recovery-state");
+  const others = state.identities.filter((i) => !i.revoked && i.didHash !== me.didHash);
+  const named = (h) => {
+    const who = state.identities.find((i) => i.didHash === h);
+    return who ? label(who.controller) : shortDid(h);
+  };
+
+  const set = r.mine;
+  const has = set && set.threshold > 0;
+  pill.textContent = has ? `${set.threshold} of ${set.guardians.length} guardians` : "no guardians yet";
+  pill.className = has ? "pill pill-good" : "pill pill-wait";
+  $("#recovery-note").textContent = has
+    ? "These identities can jointly move yours to a new key. Your roles and your assets follow it - nothing is reissued. While the waiting period runs you can cancel, so a quorum cannot take your identity while you still hold your key."
+    : "Nominate people you trust. If your key is ever lost, any threshold of them together can move your identity to a new key - and your roles and assets come with it.";
+
+  box.innerHTML = "";
+
+  // ------------------------------------------------ someone is recovering my identity
+  if (r.inFlight) {
+    const el = document.createElement("div");
+    el.className = "item warn";
+    const when = new Date(r.inFlight.executableAt * 1000);
+    el.innerHTML = `
+      <div class="head"><span class="title">A recovery of your identity is under way</span>
+        <span class="pill pill-wait">${r.inFlight.approvals} of ${r.inFlight.threshold} approvals</span></div>
+      <div class="sub mono">proposed new key ${esc(r.inFlight.proposed)}</div>
+      <div class="sub">Executable after ${esc(when.toLocaleString())}.</div>
+      <div class="actions"><button class="small danger" id="veto">This was not me - cancel it</button></div>`;
+    box.append(el);
+    $("#veto").onclick = () => send("Cancel recovery", async () => (await writer("DIDRegistry")).cancelRecovery());
+  }
+
+  // ------------------------------------------------------------- nominate my guardians
+  const el = document.createElement("div");
+  el.className = "item";
+  el.innerHTML = `
+    <div class="head"><span class="title">${has ? "Your guardians" : "Choose your guardians"}</span></div>
+    ${
+      has
+        ? `<div class="chips">${set.guardians
+            .map((h) => `<span class="chip role">${esc(named(h))}</span>`)
+            .join("")}</div>
+           <div class="sub">Any <b>${set.threshold}</b> of them together, after a wait of
+             ${set.delay === 0 ? "no delay" : friendlyDelay(set.delay)}.</div>`
+        : ""
+    }
+    <div class="guardian-pick">${others
+      .map(
+        (i) => `<label class="check"><input type="checkbox" class="g-pick" value="${esc(i.didHash)}"
+          ${set?.guardians.includes(i.didHash) ? "checked" : ""} /> ${esc(label(i.controller))}</label>`
+      )
+      .join("")}</div>
+    <div class="row">
+      <label class="named"><span>How many must agree</span><input id="g-threshold" type="number" min="1" max="10" value="${
+        has ? set.threshold : 2
+      }" /></label>
+      <label class="named"><span>Wait before it takes effect</span>
+        <select id="g-delay">
+          <option value="0">no wait</option>
+          <option value="3600">1 hour</option>
+          <option value="86400" ${!has || set.delay === 86400 ? "selected" : ""}>1 day</option>
+          <option value="604800">7 days</option>
+        </select></label>
+      <button class="small" id="g-save">${has ? "Update guardians" : "Nominate guardians"}</button>
+    </div>`;
+  box.append(el);
+  $("#g-save").onclick = () => {
+    const picked = [...document.querySelectorAll(".g-pick:checked")].map((c) => c.value);
+    const threshold = Number($("#g-threshold").value);
+    if (!picked.length) return toast("Guardians", "choose at least one person", "err");
+    if (threshold < 1 || threshold > picked.length) {
+      return toast("Guardians", `the number who must agree cannot exceed ${picked.length}`, "err");
+    }
+    send("Set guardians", async () =>
+      (await writer("DIDRegistry")).setGuardians(picked, threshold, Number($("#g-delay").value))
+    );
+  };
+
+  // ------------------------------------------------- identities that named me a guardian
+  for (const w of state.recovery.watching) {
+    const card = document.createElement("div");
+    card.className = "item";
+    const rec = w.rec;
+    const ready = rec && rec.approvals >= rec.threshold && Date.now() / 1000 >= rec.executableAt;
+    card.innerHTML = `
+      <div class="head"><span class="title">${esc(label(w.id.controller))} trusts you as a guardian</span>
+        ${rec ? `<span class="pill pill-wait">${rec.approvals} of ${rec.threshold} approvals</span>` : ""}</div>
+      ${
+        rec
+          ? `<div class="sub mono">proposed new key ${esc(rec.proposed)}</div>
+             <div class="sub">${
+               ready
+                 ? "The threshold is met and the waiting period has passed."
+                 : "Executable after " + esc(new Date(rec.executableAt * 1000).toLocaleString())
+             }</div>
+             <div class="actions">
+               <button class="small approve">Approve this recovery</button>
+               <button class="small go" ${ready ? "" : "disabled"}>Move the identity to the new key</button>
+             </div>`
+          : `<div class="row">
+               <input class="newkey" placeholder="their new wallet address (0x…)" />
+               <button class="small start">Start a recovery</button>
+             </div>
+             <div class="sub">Only do this if they have genuinely lost their key. They can cancel it while the waiting period runs.</div>`
+      }`;
+    box.append(card);
+
+    if (rec) {
+      card.querySelector(".approve").onclick = () =>
+        send("Approve recovery", async () => (await writer("DIDRegistry")).approveRecovery(w.id.didHash));
+      card.querySelector(".go").onclick = () =>
+        send("Execute recovery", async () => (await writer("DIDRegistry")).executeRecovery(w.id.didHash));
+    } else {
+      card.querySelector(".start").onclick = async () => {
+        const to = card.querySelector(".newkey").value.trim();
+        if (!ethers.isAddress(to)) return toast("Start recovery", "that is not a wallet address", "err");
+        const ok = await confirmAction({
+          title: `Start recovery of ${label(w.id.controller)}'s identity?`,
+          body: `It moves to ${short(to)} once ${w.set.threshold} guardians agree and the waiting period has passed.`,
+          consequence: "They can cancel it while the wait runs. Do this only if they have really lost their key.",
+          confirmLabel: "Start recovery",
+        });
+        if (ok) send("Start recovery", async () => (await writer("DIDRegistry")).initiateRecovery(w.id.didHash, to));
+      };
+    }
+  }
+}
+
+const friendlyDelay = (s) =>
+  s >= 86400 ? `${Math.round(s / 86400)} day${s >= 172800 ? "s" : ""}` : `${Math.round(s / 3600)} hour${s >= 7200 ? "s" : ""}`;
 
 const BLOCKS_SHOWN = 6;
 const recentBlockNumbers = () => [...state.chain.blocks.keys()].sort((a, b) => b - a).slice(0, BLOCKS_SHOWN);
