@@ -43,6 +43,7 @@ library Actions {
     bytes32 internal constant ASSET_BURNED        = keccak256("ASSET_BURNED");
     bytes32 internal constant ASSET_REVOKED       = keccak256("ASSET_REVOKED");
     bytes32 internal constant ASSET_REINSTATED    = keccak256("ASSET_REINSTATED");
+    bytes32 internal constant FIELDS_COMMITTED    = keccak256("FIELDS_COMMITTED");
     bytes32 internal constant GUARDIANS_SET       = keccak256("GUARDIANS_SET");
     bytes32 internal constant RECOVERY_STARTED    = keccak256("RECOVERY_STARTED");
     bytes32 internal constant RECOVERY_APPROVED   = keccak256("RECOVERY_APPROVED");
